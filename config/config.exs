@@ -1,5 +1,9 @@
 import Config
 
+# Ecto repos for migrations
+config :image_store,
+  ecto_repos: [ImageStore.Repo]
+
 # Shared configuration for all apps
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",

@@ -1,0 +1,131 @@
+defmodule ImageStore do
+  @moduledoc """
+  Context module for image storage operations.
+  Provides a clean API for storing and retrieving images.
+  """
+
+  alias ImageStore.Media.Image
+  alias ImageStore.Repo
+
+  import Ecto.Query
+
+  @doc """
+  Creates an image record from upload data.
+
+  ## Parameters
+    - bytes: Raw binary image data
+    - content_type: MIME type (must be image/*)
+    - opts: Optional fields
+      - :kind - Image kind (default: "cover_front")
+      - :uploader_id - UUID of uploader
+
+  ## Returns
+    - {:ok, image} on success
+    - {:error, :duplicate} if SHA-256 already exists
+    - {:error, changeset} on validation failure
+  """
+  @spec create_image(binary(), String.t(), keyword()) ::
+          {:ok, Image.t()} | {:error, :duplicate | Ecto.Changeset.t()}
+  def create_image(bytes, content_type, opts \\ []) when is_binary(bytes) do
+    sha256 = :crypto.hash(:sha256, bytes)
+
+    # Check for duplicate before insert (fail fast)
+    if duplicate_exists?(sha256) do
+      {:error, :duplicate}
+    else
+      attrs = %{
+        bytes: bytes,
+        content_type: content_type,
+        byte_size: byte_size(bytes),
+        sha256: sha256,
+        kind: Keyword.get(opts, :kind, "cover_front"),
+        uploader_id: Keyword.get(opts, :uploader_id)
+      }
+
+      %Image{}
+      |> Image.create_changeset(attrs)
+      |> Repo.insert()
+      |> case do
+        {:ok, image} ->
+          {:ok, image}
+
+        {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+          # Handle race condition where duplicate was inserted between check and insert
+          if Keyword.has_key?(errors, :sha256) do
+            {:error, :duplicate}
+          else
+            {:error, changeset}
+          end
+      end
+    end
+  end
+
+  @doc """
+  Gets image metadata by ID (excludes binary data for efficiency).
+
+  ## Returns
+    - {:ok, image} if found (with bytes set to nil)
+    - {:error, :not_found} if not found
+  """
+  @spec get_image(binary()) :: {:ok, Image.t()} | {:error, :not_found}
+  def get_image(id) when is_binary(id) do
+    query =
+      from i in Image,
+        where: i.id == ^id,
+        select: %{
+          i
+          | bytes: nil
+        }
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      image -> {:ok, image}
+    end
+  end
+
+  @doc """
+  Gets image binary data by ID for streaming.
+
+  ## Returns
+    - {:ok, bytes, content_type} if found
+    - {:error, :not_found} if not found
+  """
+  @spec get_image_blob(binary()) :: {:ok, binary(), String.t()} | {:error, :not_found}
+  def get_image_blob(id) when is_binary(id) do
+    query =
+      from i in Image,
+        where: i.id == ^id,
+        select: {i.bytes, i.content_type}
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      {bytes, content_type} -> {:ok, bytes, content_type}
+    end
+  end
+
+  @doc """
+  Checks if an image with the given SHA-256 hash already exists.
+  """
+  @spec duplicate_exists?(binary()) :: boolean()
+  def duplicate_exists?(sha256) when is_binary(sha256) do
+    query = from i in Image, where: i.sha256 == ^sha256, select: 1, limit: 1
+    Repo.one(query) != nil
+  end
+
+  @doc """
+  Formats image metadata for JSON response.
+  """
+  @spec to_json_response(Image.t()) :: map()
+  def to_json_response(%Image{} = image) do
+    %{
+      image_id: image.id,
+      sha256: Base.encode16(image.sha256, case: :lower),
+      byte_size: image.byte_size,
+      content_type: image.content_type,
+      kind: image.kind,
+      width: image.width,
+      height: image.height,
+      created_at: image.created_at
+    }
+  end
+end

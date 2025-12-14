@@ -93,35 +93,157 @@ For small scale: Postgres-backed event table or simple pub/sub. For larger scale
 - `entry_hash` = hash(prev_hash + payload + timestamp)
 - Provides tamper-evident audit trail for copy provenance
 
-## Tech Stack (Recommended)
+## Tech Stack
 
-**Backend**: Rust (Axum) or Elixir/Phoenix
-- Choose Rust for: speed, type safety, ML integration
-- Choose Elixir for: realtime features, easy async, excellent DX
+**Backend**: Elixir/Phoenix umbrella application
+- Phoenix for HTTP API
+- Ecto for database access and migrations
+- Organized as umbrella app with separated concerns
 
-**Database**: PostgreSQL 14+
-- Use schema namespaces for bounded contexts
-- Migrations: sqlx (Rust) or Ecto (Elixir)
+**Database**: PostgreSQL (via Ecto)
+- Schema namespaces for bounded contexts (see `database/schema.sql`)
+- Migrations in `apps/image_store/priv/repo/migrations/`
+- Development DB: `covr_dev` on localhost:5432
 
-**Search**: Meilisearch (simple) or Typesense
-- Index shape matches `catalog.copy` JOIN `catalog.book`
+**Search**: Meilisearch (in docker-compose, not yet integrated)
+- Will index `catalog.copy` JOIN `catalog.book`
 - Sync on copy updates
 
-**Vector DB** (optional): Qdrant or pgvector
-- Only needed for visual similarity search
+**Vector DB**: Qdrant (in docker-compose, not yet integrated)
+- For visual similarity search
 - Can skip initially and use pHash only
 
-**Object Storage**: S3-compatible
-- Dev: MinIO (local)
-- Prod: Cloudflare R2 (cheap, fast)
+**Object Storage**:
+- Current: Images stored as BLOBs in Postgres (temporary)
+- Planned: MinIO (dev) / Cloudflare R2 (prod)
+- MinIO available via docker-compose
 
-**Frontend**: Next.js PWA
-- Camera capture via Progressive Web App
-- Server-side rendering for performance
+**Frontend**: Not yet implemented
+- Planned: Next.js PWA with camera capture
+
+## Implementation: Elixir Umbrella Application
+
+Covr is implemented as an Elixir umbrella application with Phoenix. Current apps:
+
+### `gateway` (Phoenix API)
+HTTP interface exposing REST endpoints. Delegates to sibling apps for business logic.
+
+**Endpoints**:
+- `POST /api/images` - Upload cover image
+- `GET /api/images/:id` - Get image metadata
+- `GET /api/images/:id/blob` - Download image blob
+
+**Port**: 4000 (dev)
+
+### `image_store` (Ecto + Business Logic)
+Image storage and deduplication logic. Uses Ecto for database access.
+
+**Key modules**:
+- `ImageStore.Media.Image` - Image schema and changesets
+- `ImageStore.Repo` - Ecto repository
+
+**Current implementation**: Stores images as BLOBs in Postgres (will migrate to S3/MinIO later)
 
 ## Development Commands
 
-(To be added once stack is finalized)
+### Initial Setup
+```bash
+# Install dependencies and create database
+mix setup
+
+# Or step by step:
+mix deps.get
+mix ecto.create
+mix ecto.migrate
+```
+
+### Running the Application
+```bash
+# Start all apps with IEx console
+iex -S mix phx.server
+
+# Start without console
+mix phx.server
+
+# Application runs on http://localhost:4000
+```
+
+### Database Operations
+```bash
+# Create database
+mix ecto.create
+
+# Run migrations
+mix ecto.migrate
+
+# Rollback last migration
+mix ecto.rollback
+
+# Reset database (drop, create, migrate)
+mix ecto.reset
+
+# Generate new migration
+cd apps/image_store
+mix ecto.gen.migration migration_name
+```
+
+### Testing
+```bash
+# Run all tests
+mix test
+
+# Run specific app tests
+cd apps/gateway && mix test
+cd apps/image_store && mix test
+
+# Run specific test file
+mix test path/to/test_file.exs
+
+# Run specific test line
+mix test path/to/test_file.exs:42
+```
+
+### Code Quality
+```bash
+# Format code
+mix format
+
+# Check formatting without changes
+mix format --check-formatted
+
+# Run dialyzer (if configured)
+mix dialyzer
+```
+
+### Docker Infrastructure
+```bash
+# Start infrastructure services (Postgres, Meilisearch, Qdrant, MinIO)
+docker-compose up -d
+
+# Check service health
+docker-compose ps
+
+# View logs
+docker-compose logs -f [service_name]
+
+# Stop services
+docker-compose down
+
+# Stop and remove volumes (data reset)
+docker-compose down -v
+```
+
+### Interactive Development
+```bash
+# Open IEx with app loaded
+iex -S mix
+
+# Reload modules after code changes
+recompile()
+
+# Access repo directly
+ImageStore.Repo.all(ImageStore.Media.Image)
+```
 
 ## Common Patterns
 
@@ -172,16 +294,135 @@ For small scale: Postgres-backed event table or simple pub/sub. For larger scale
 ## Important Notes
 
 - **Never bypass the ledger**: All exchanges MUST write to `exchange.ledger_entry`
-- **Image storage**: Store only S3 keys + hashes in Postgres, never image bytes
+- **Image storage**: Currently using Postgres BLOBs (temporary); migrate to S3/MinIO for production
 - **Dedup is critical**: Always run all three dedup checks (SHA-256, pHash, embeddings)
 - **Current holder is denormalized**: Update `catalog.copy.current_holder_id` on every transfer
 - **Bounded contexts**: Keep engines independent - communicate via events, not direct DB joins across schemas
 - **Scale assumptions**: Designed for hundreds to thousands of books; revisit if hitting 100k+ copies
+- **Umbrella organization**: Each engine should be its own app in `apps/` directory as implementation continues
 
-## Testing Strategy
+## Elixir-Specific Patterns
 
-(To be added with implementation)
+### Adding a New App to the Umbrella
 
-## Deployment
+```bash
+# From project root
+cd apps
+mix new app_name --sup
 
-(To be added with implementation)
+# Update deps to use umbrella configuration
+# Edit apps/app_name/mix.exs
+```
+
+### Cross-App Communication
+
+Apps communicate via direct module calls (they're in the same VM):
+
+```elixir
+# In gateway app, calling image_store
+ImageStore.Media.create_image(params)
+```
+
+For event-driven patterns, use:
+- `Phoenix.PubSub` (small scale, in-memory)
+- Postgres NOTIFY/LISTEN via Ecto
+- NATS (larger scale, planned)
+
+### Database Schemas
+
+**Important**: There are two database schema definitions in this project:
+
+1. **Reference schema** (`database/schema.sql`): Complete target schema with all four engines, schema namespaces, and constraints. This is the architectural blueprint.
+
+2. **Ecto migrations** (`apps/*/priv/repo/migrations/`): Incremental migrations applied by Ecto. Currently only implements `media_images` table.
+
+**Current state**: Only `media_images` table exists (from Ecto migration). The full `database/schema.sql` with schema namespaces will be implemented incrementally as new engine apps are added.
+
+Each app with database access should define its own schema namespace:
+- `image_store` → `media.*` schema (partially implemented, currently just `media_images` table)
+- Future apps will own other schemas (`contact.*`, `catalog.*`, `exchange.*`)
+
+### Testing Umbrella Apps
+
+Tests run per-app. Always set up test database in test helper:
+
+```elixir
+# apps/app_name/test/test_helper.exs
+ExUnit.start()
+Ecto.Adapters.SQL.Sandbox.mode(ImageStore.Repo, :manual)
+```
+
+## Project Structure
+
+```
+Covr/
+├── apps/                          # Umbrella apps
+│   ├── gateway/                   # Phoenix API (HTTP interface)
+│   │   ├── lib/
+│   │   │   ├── gateway/
+│   │   │   │   ├── controllers/   # HTTP controllers
+│   │   │   │   ├── plugs/         # Custom plugs (CORS, health check)
+│   │   │   │   ├── router.ex      # Route definitions
+│   │   │   │   └── endpoint.ex    # Phoenix endpoint config
+│   │   │   └── gateway.ex
+│   │   └── mix.exs
+│   └── image_store/               # Image storage + dedup
+│       ├── lib/
+│       │   ├── image_store/
+│       │   │   ├── media/         # Media context
+│       │   │   │   └── image.ex   # Image schema
+│       │   │   └── repo.ex        # Ecto repo
+│       │   └── image_store.ex
+│       ├── priv/repo/migrations/  # Ecto migrations
+│       └── mix.exs
+├── config/                        # Shared umbrella config
+│   ├── config.exs
+│   ├── dev.exs                    # Development config
+│   ├── test.exs                   # Test config
+│   ├── prod.exs                   # Production config
+│   └── runtime.exs                # Runtime config
+├── database/                      # Database documentation
+│   ├── schema.sql                 # Full PostgreSQL schema (reference)
+│   └── ARCHITECTURE.md            # Multi-store architecture docs
+├── docs/                          # Documentation
+│   ├── SETUP.md                   # Setup guide
+│   └── GITKRAKEN_MCP.md          # GitKraken MCP integration
+├── docker-compose.yml             # Local infrastructure
+├── mix.exs                        # Umbrella project definition
+└── CLAUDE.md                      # This file
+```
+
+## Next Implementation Steps
+
+Based on the current state, these are the logical next steps:
+
+1. **Migrate image storage to MinIO/S3**
+   - Update `ImageStore.Media.Image` to store object keys instead of BLOBs
+   - Add ExAws or similar S3 client library
+   - Create migration to backfill existing images
+
+2. **Implement remaining engines as separate apps**
+   - `apps/contact` - User and channel management
+   - `apps/catalog` - Books and copies
+   - `apps/ingest` - OCR, identification, deduplication
+   - `apps/exchange` - Requests, transfers, ledger
+
+3. **Add event bus for cross-engine communication**
+   - Start with `Phoenix.PubSub` for simplicity
+   - Topics: `image_uploaded`, `book_identified`, `exchange_completed`
+   - Each app subscribes to relevant topics
+
+4. **Integrate Meilisearch**
+   - Add Meilisearch client library
+   - Create search sync worker in `apps/search` (new app)
+   - Subscribe to copy/book change events
+
+5. **Integrate Qdrant for vector similarity**
+   - Add Qdrant client library
+   - Generate embeddings on image upload
+   - Query for deduplication and visual search
+
+6. **Implement hash-chained ledger**
+   - Create `apps/exchange` app
+   - Implement ledger append logic with hash verification
+   - Add background job to verify chain integrity

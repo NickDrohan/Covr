@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+cd -P -- "$(dirname -- "$0")"
+
+# Run migrations first
+./covr eval ImageStore.Release.migrate
+
+# Then start the server
+exec ./covr start

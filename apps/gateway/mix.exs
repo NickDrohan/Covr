@@ -30,16 +30,21 @@ defmodule Gateway.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.7.14"},
+      {:phoenix_live_view, "~> 0.20"},
+      {:phoenix_html, "~> 4.1"},
       {:plug_cowboy, "~> 2.7"},
       {:jason, "~> 1.4"},
       {:dns_cluster, "~> 0.1.1"},
       {:corsica, "~> 2.1"},
+      {:oban, "~> 2.17"},
+      {:req, "~> 0.5"},
 
       # Sibling app dependency
       {:image_store, in_umbrella: true},
 
       # Test dependencies
-      {:phoenix_live_reload, "~> 1.5", only: :dev}
+      {:phoenix_live_reload, "~> 1.5", only: :dev},
+      {:floki, "~> 0.36", only: :test}
     ]
   end
 

@@ -113,6 +113,23 @@ defmodule ImageStore do
   end
 
   @doc """
+  Lists all images (excludes binary data for efficiency).
+  Returns images ordered by created_at descending (newest first).
+  """
+  @spec list_images() :: [Image.t()]
+  def list_images do
+    query =
+      from i in Image,
+        order_by: [desc: i.created_at],
+        select: %{
+          i
+          | bytes: nil
+        }
+
+    Repo.all(query)
+  end
+
+  @doc """
   Formats image metadata for JSON response.
   """
   @spec to_json_response(Image.t()) :: map()
@@ -125,7 +142,68 @@ defmodule ImageStore do
       kind: image.kind,
       width: image.width,
       height: image.height,
+      pipeline_status: image.pipeline_status,
       created_at: image.created_at
+    }
+  end
+
+  @doc """
+  Gets database statistics for the admin dashboard.
+  """
+  @spec get_stats() :: map()
+  def get_stats do
+    # Total count
+    total_count =
+      from(i in Image, select: count(i.id))
+      |> Repo.one()
+
+    # Total size
+    total_size =
+      from(i in Image, select: sum(i.byte_size))
+      |> Repo.one() || 0
+
+    # Average size
+    avg_size =
+      from(i in Image, select: avg(i.byte_size))
+      |> Repo.one() || 0
+
+    # Count by kind
+    by_kind =
+      from(i in Image,
+        group_by: i.kind,
+        select: {i.kind, count(i.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Count by pipeline status
+    by_pipeline_status =
+      from(i in Image,
+        group_by: i.pipeline_status,
+        select: {i.pipeline_status, count(i.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Recent uploads (last 24 hours)
+    yesterday = DateTime.add(DateTime.utc_now(), -24, :hour)
+
+    recent_count =
+      from(i in Image,
+        where: i.created_at >= ^yesterday,
+        select: count(i.id)
+      )
+      |> Repo.one()
+
+    %{
+      total_count: total_count,
+      total_size_bytes: total_size,
+      total_size_mb: Float.round(total_size / 1_048_576, 2),
+      avg_size_bytes: round(avg_size),
+      avg_size_kb: Float.round(avg_size / 1024, 2),
+      by_kind: by_kind,
+      by_pipeline_status: by_pipeline_status,
+      recent_uploads_24h: recent_count
     }
   end
 end

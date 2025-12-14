@@ -33,7 +33,8 @@ defmodule ImageStore.MixProject do
     [
       {:ecto_sql, "~> 3.11"},
       {:postgrex, ">= 0.0.0"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:oban, "~> 2.17"}
     ]
   end
 

@@ -13,7 +13,12 @@ config :image_store, ImageStore.Repo,
 config :gateway, Gateway.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "test-secret-key-base-that-is-at-least-64-bytes-long-for-testing-only-ok",
-  server: false
+  server: false,
+  live_view: [signing_salt: "test-liveview-salt-for-testing"]
+
+# Oban testing mode - inline execution
+config :gateway, Oban,
+  testing: :inline
 
 # Quieter logging in test
 config :logger, level: :warning

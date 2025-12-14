@@ -25,3 +25,7 @@ config :logger, :console, format: "[$level] $message\n"
 # Dev-specific settings
 config :phoenix, :stacktrace_depth, 20
 config :phoenix, :plug_init_mode, :runtime
+
+# LiveView configuration for development
+config :gateway, Gateway.Endpoint,
+  live_view: [signing_salt: "dev-liveview-salt-for-development"]

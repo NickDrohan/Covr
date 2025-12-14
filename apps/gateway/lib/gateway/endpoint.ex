@@ -1,13 +1,18 @@
 defmodule Gateway.Endpoint do
   use Phoenix.Endpoint, otp_app: :gateway
 
-  # Session configuration (not used for API but required by Phoenix)
+  # Session configuration
   @session_options [
     store: :cookie,
     key: "_gateway_key",
     signing_salt: "image_api",
     same_site: "Lax"
   ]
+
+  # LiveView socket for admin dashboard
+  socket "/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: false
 
   # Health check should come before parsers (no body needed)
   plug Gateway.Plugs.HealthCheck

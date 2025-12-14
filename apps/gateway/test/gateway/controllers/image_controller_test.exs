@@ -3,11 +3,6 @@ defmodule Gateway.ImageControllerTest do
 
   @test_png <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 8, 215, 99, 248, 207, 192, 0, 0, 0, 3, 0, 1, 0, 24, 221, 141, 176, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130>>
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(ImageStore.Repo)
-    :ok
-  end
-
   describe "POST /api/images" do
     test "uploads an image successfully", %{conn: conn} do
       upload = %Plug.Upload{
@@ -76,6 +71,40 @@ defmodule Gateway.ImageControllerTest do
       conn2 = get(build_conn(), "/api/images/#{id}/blob")
       assert conn2.status == 200
       assert get_resp_header(conn2, "content-type") |> hd() =~ "image/png"
+    end
+  end
+
+  describe "GET /api/images/:id/pipeline" do
+    test "returns pipeline status for image", %{conn: conn} do
+      # First upload
+      upload = %Plug.Upload{
+        path: write_temp_file(@test_png),
+        content_type: "image/png",
+        filename: "test.png"
+      }
+
+      conn1 = post(conn, "/api/images", %{"image" => upload})
+      %{"image_id" => id} = json_response(conn1, 201)
+
+      # Get pipeline status (in test mode, Oban runs inline so pipeline should complete)
+      conn2 = get(build_conn(), "/api/images/#{id}/pipeline")
+
+      assert %{
+               "execution_id" => _,
+               "image_id" => ^id,
+               "status" => status,
+               "steps" => steps
+             } = json_response(conn2, 200)
+
+      assert status in ["pending", "running", "completed", "failed"]
+      assert is_list(steps)
+    end
+
+    test "returns 404 for image without pipeline", %{conn: conn} do
+      fake_id = Ecto.UUID.generate()
+      conn = get(conn, "/api/images/#{fake_id}/pipeline")
+
+      assert %{"error" => _} = json_response(conn, 404)
     end
   end
 

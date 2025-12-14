@@ -10,7 +10,15 @@
       "Bash(cmd /c gk --version)",
       "Bash(git add:*)",
       "Bash(git commit -m \"$(cat <<''EOF''\nInitial commit: Covr - A novel book-sharing platform\n\nSet up foundational architecture for Covr, a book-sharing platform with a\ncover-first interaction model where users photograph book covers to add or\ntransfer books.\n\nAdded:\n- Complete PostgreSQL schema with four bounded contexts (engines):\n  * Contact Engine: users and communication channels\n  * Ingest Engine: image processing, book identification, deduplication\n  * Search Engine: fast filtering via Meilisearch integration\n  * Exchange Engine: transfers, requests, degradation tracking, hash-chained ledger\n\n- Database architecture documentation:\n  * SQL schema with enums, tables, indexes, and triggers\n  * Multi-store strategy (Postgres + Meilisearch + Qdrant + S3)\n  * Event contracts for inter-engine communication\n  * Hash-chained ledger for provenance tracking\n\n- Development infrastructure:\n  * Docker Compose setup for local development\n  * PostgreSQL 16, Meilisearch, Qdrant, MinIO (S3-compatible)\n  * Setup and configuration guides\n\n- Project documentation:\n  * README with project overview and architecture summary\n  * CLAUDE.md for AI-assisted development guidance\n  * CONTRIBUTING.md with development principles\n  * MIT License\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(elixir --version:*)",
+      "Bash(mix:*)",
+      "Bash(docker-compose config:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)"
     ]
   }
 }

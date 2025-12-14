@@ -7,11 +7,15 @@ defmodule Gateway.ImageController do
   POST /api/images
   Accepts multipart/form-data with "image" field.
   Optional "kind" field (default: "cover_front").
+  Triggers async pipeline processing after upload.
   """
   def create(conn, params) do
     with {:ok, upload} <- get_upload(params),
          {:ok, bytes} <- read_upload(upload),
          {:ok, image} <- create_image(bytes, upload.content_type, params) do
+      # Trigger async pipeline processing
+      Gateway.Pipeline.process_image(image.id)
+
       conn
       |> put_status(:created)
       |> json(ImageStore.to_json_response(image))
@@ -77,6 +81,58 @@ defmodule Gateway.ImageController do
         |> put_status(:not_found)
         |> json(%{error: "Image not found"})
     end
+  end
+
+  @doc """
+  GET /images
+  Returns list of all images (metadata only, no binary data).
+  """
+  def index(conn, _params) do
+    images = ImageStore.list_images()
+    json(conn, Enum.map(images, &ImageStore.to_json_response/1))
+  end
+
+  @doc """
+  GET /api/images/:id/pipeline
+  Returns pipeline execution status and step results.
+  """
+  def pipeline(conn, %{"id" => id}) do
+    case Gateway.Pipeline.get_status(id) do
+      {:ok, execution} ->
+        json(conn, format_execution_response(execution))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "No pipeline execution found for this image"})
+    end
+  end
+
+  # Format pipeline execution for JSON response
+  defp format_execution_response(execution) do
+    %{
+      execution_id: execution.id,
+      image_id: execution.image_id,
+      status: execution.status,
+      error_message: execution.error_message,
+      started_at: execution.started_at,
+      completed_at: execution.completed_at,
+      created_at: execution.created_at,
+      steps: Enum.map(execution.steps, &format_step_response/1)
+    }
+  end
+
+  defp format_step_response(step) do
+    %{
+      step_name: step.step_name,
+      step_order: step.step_order,
+      status: step.status,
+      duration_ms: step.duration_ms,
+      output_data: step.output_data,
+      error_message: step.error_message,
+      started_at: step.started_at,
+      completed_at: step.completed_at
+    }
   end
 
   # --- Private Helpers ---

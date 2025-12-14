@@ -336,7 +336,13 @@ For event-driven patterns, use:
 
 2. **Ecto migrations** (`apps/*/priv/repo/migrations/`): Incremental migrations applied by Ecto. Currently only implements `media_images` table.
 
-**Current state**: Only `media_images` table exists (from Ecto migration). The full `database/schema.sql` with schema namespaces will be implemented incrementally as new engine apps are added.
+**Current state**: The following tables exist:
+- `media_images` - Image storage with pipeline_status
+- `pipeline_executions` - Tracks full pipeline runs
+- `pipeline_steps` - Individual step execution results
+- `oban_jobs` - Oban job queue
+
+The full `database/schema.sql` with schema namespaces will be implemented incrementally as new engine apps are added.
 
 Each app with database access should define its own schema namespace:
 - `image_store` → `media.*` schema (partially implemented, currently just `media_images` table)
@@ -356,73 +362,103 @@ Ecto.Adapters.SQL.Sandbox.mode(ImageStore.Repo, :manual)
 
 ```
 Covr/
-├── apps/                          # Umbrella apps
-│   ├── gateway/                   # Phoenix API (HTTP interface)
+├── apps/                              # Umbrella apps
+│   ├── gateway/                       # Phoenix API + Admin Dashboard
 │   │   ├── lib/
-│   │   │   ├── gateway/
-│   │   │   │   ├── controllers/   # HTTP controllers
-│   │   │   │   ├── plugs/         # Custom plugs (CORS, health check)
-│   │   │   │   ├── router.ex      # Route definitions
-│   │   │   │   └── endpoint.ex    # Phoenix endpoint config
-│   │   │   └── gateway.ex
+│   │   │   └── gateway/
+│   │   │       ├── controllers/       # HTTP controllers
+│   │   │       │   └── image_controller.ex
+│   │   │       ├── live/              # LiveView modules
+│   │   │       │   └── admin_dashboard_live.ex
+│   │   │       ├── components/        # Phoenix components
+│   │   │       │   ├── layouts.ex
+│   │   │       │   └── layouts/       # Layout templates
+│   │   │       ├── pipeline/          # Image processing pipeline
+│   │   │       │   ├── executor.ex    # Pipeline orchestrator
+│   │   │       │   ├── step_behaviour.ex
+│   │   │       │   ├── steps/         # Step implementations
+│   │   │       │   │   ├── book_identification.ex
+│   │   │       │   │   ├── image_cropping.ex
+│   │   │       │   │   └── health_assessment.ex
+│   │   │       │   └── workers/       # Oban workers
+│   │   │       │       └── process_image_worker.ex
+│   │   │       ├── plugs/             # Custom plugs
+│   │   │       ├── telemetry.ex       # Telemetry handlers
+│   │   │       ├── router.ex
+│   │   │       └── endpoint.ex
 │   │   └── mix.exs
-│   └── image_store/               # Image storage + dedup
+│   └── image_store/                   # Image storage + pipeline data
 │       ├── lib/
-│       │   ├── image_store/
-│       │   │   ├── media/         # Media context
-│       │   │   │   └── image.ex   # Image schema
-│       │   │   └── repo.ex        # Ecto repo
-│       │   └── image_store.ex
-│       ├── priv/repo/migrations/  # Ecto migrations
+│       │   └── image_store/
+│       │       ├── media/             # Media context
+│       │       │   └── image.ex
+│       │       ├── pipeline/          # Pipeline schemas
+│       │       │   ├── execution.ex   # Pipeline execution record
+│       │       │   └── step.ex        # Individual step record
+│       │       ├── pipeline.ex        # Pipeline context module
+│       │       └── repo.ex
+│       ├── priv/repo/migrations/
 │       └── mix.exs
-├── config/                        # Shared umbrella config
-│   ├── config.exs
-│   ├── dev.exs                    # Development config
-│   ├── test.exs                   # Test config
-│   ├── prod.exs                   # Production config
-│   └── runtime.exs                # Runtime config
-├── database/                      # Database documentation
-│   ├── schema.sql                 # Full PostgreSQL schema (reference)
-│   └── ARCHITECTURE.md            # Multi-store architecture docs
-├── docs/                          # Documentation
-│   ├── SETUP.md                   # Setup guide
-│   └── GITKRAKEN_MCP.md          # GitKraken MCP integration
-├── docker-compose.yml             # Local infrastructure
-├── mix.exs                        # Umbrella project definition
-└── CLAUDE.md                      # This file
+├── config/                            # Shared umbrella config
+│   ├── config.exs                     # Base config + Oban
+│   ├── dev.exs
+│   ├── test.exs
+│   ├── prod.exs
+│   └── runtime.exs
+├── database/                          # Database documentation
+│   ├── schema.sql                     # Full PostgreSQL schema (reference)
+│   └── ARCHITECTURE.md
+├── docs/                              # Documentation
+│   ├── API.md                         # API documentation
+│   ├── SETUP.md
+│   └── GITKRAKEN_MCP.md
+├── docker-compose.yml                 # Local infrastructure
+├── fly.toml                           # Fly.io deployment config
+├── HANDOFF.md                         # Deployment/handoff documentation
+├── mix.exs                            # Umbrella project definition
+└── CLAUDE.md                          # This file
 ```
 
 ## Next Implementation Steps
 
 Based on the current state, these are the logical next steps:
 
-1. **Migrate image storage to MinIO/S3**
+1. **Integrate Real AI Services for Pipeline Steps**
+   - Replace placeholder implementations with actual AI service calls
+   - Options: OpenAI Vision API, Google Cloud Vision, AWS Rekognition
+   - Update step modules in `apps/gateway/lib/gateway/pipeline/steps/`
+
+2. **Migrate image storage to MinIO/S3**
    - Update `ImageStore.Media.Image` to store object keys instead of BLOBs
    - Add ExAws or similar S3 client library
    - Create migration to backfill existing images
 
-2. **Implement remaining engines as separate apps**
+3. **Implement remaining engines as separate apps**
    - `apps/contact` - User and channel management
    - `apps/catalog` - Books and copies
    - `apps/ingest` - OCR, identification, deduplication
    - `apps/exchange` - Requests, transfers, ledger
 
-3. **Add event bus for cross-engine communication**
-   - Start with `Phoenix.PubSub` for simplicity
+4. **Add event bus for cross-engine communication**
+   - `Phoenix.PubSub` is already configured
    - Topics: `image_uploaded`, `book_identified`, `exchange_completed`
    - Each app subscribes to relevant topics
 
-4. **Integrate Meilisearch**
+5. **Integrate Meilisearch**
    - Add Meilisearch client library
    - Create search sync worker in `apps/search` (new app)
    - Subscribe to copy/book change events
 
-5. **Integrate Qdrant for vector similarity**
+6. **Integrate Qdrant for vector similarity**
    - Add Qdrant client library
    - Generate embeddings on image upload
    - Query for deduplication and visual search
 
-6. **Implement hash-chained ledger**
+7. **Implement hash-chained ledger**
    - Create `apps/exchange` app
    - Implement ledger append logic with hash verification
    - Add background job to verify chain integrity
+
+8. **Add Authentication to Admin Dashboard**
+   - Implement basic auth or session-based login
+   - Add authorization for admin-only routes

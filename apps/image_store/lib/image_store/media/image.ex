@@ -23,6 +23,7 @@ defmodule ImageStore.Media.Image do
     field :phash, :integer
     field :width, :integer
     field :height, :integer
+    field :pipeline_status, :string, default: "pending"
     field :created_at, :utc_datetime_usec
   end
 

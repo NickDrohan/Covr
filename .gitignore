@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+target/
+.cargo/
+
+# Build outputs
+dist/
+build/
+*.wasm
+*.exe
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+postgres-data/
+minio-data/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Rust
+Cargo.lock
+**/*.rs.bk
+
+# Docker
+docker-compose.override.yml
+
+# Testing
+coverage/
+.nyc_output/
+
+# Object storage
+uploads/
+images/
+local-storage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS
+Thumbs.db
+.DS_Store

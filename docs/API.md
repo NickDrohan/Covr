@@ -172,6 +172,114 @@ Returns the processing pipeline status and step results for an image.
 - `completed` - All steps completed successfully
 - `failed` - One or more steps failed
 
+### Delete Image
+
+```
+DELETE /api/images/:id
+```
+
+Deletes an image and all associated pipeline data.
+
+**Response (204 No Content):** Image deleted successfully
+
+**Error (404 Not Found):**
+```json
+{
+  "error": "Image not found"
+}
+```
+
+### Process Image (Manual Workflow)
+
+```
+POST /api/images/:id/process
+Content-Type: application/json
+```
+
+Triggers a specific processing workflow on an image. Use this to manually process images that have already been ingested.
+
+**Request Body:**
+```json
+{
+  "workflow": "rotation"
+}
+```
+
+**Valid Workflows:**
+- `rotation` - Detects book in image, validates exactly 1 book, rotates so text reads left-to-right, top-to-bottom
+- `crop` - Crops image to focus on the book
+- `health_assessment` - Assesses book condition/grade
+- `full` - Triggers the full async pipeline
+
+**Response (200 OK) - Rotation Example:**
+```json
+{
+  "success": true,
+  "workflow": "rotation",
+  "result": {
+    "rotated": true,
+    "rotation_degrees": 90,
+    "book_detection": {
+      "book_count": 1,
+      "books": [{"confidence": 0.95, "bounding_box": {...}}]
+    },
+    "text_orientation": {
+      "current_orientation": 90,
+      "confidence": 0.9
+    },
+    "image_updated": true,
+    "new_byte_size": 245678
+  },
+  "image": {
+    "image_id": "550e8400-e29b-41d4-a716-446655440000",
+    "sha256": "updated_hash...",
+    "byte_size": 245678,
+    ...
+  }
+}
+```
+
+**Error (422 Unprocessable Entity) - No Book Detected:**
+```json
+{
+  "success": false,
+  "workflow": "rotation",
+  "error": {
+    "error": "No book detected in image",
+    "error_code": "NO_BOOK",
+    "context": {
+      "message": "No book detected in image",
+      "suggestion": "Ensure the image contains a clear view of a single book cover"
+    }
+  }
+}
+```
+
+**Error (422 Unprocessable Entity) - Multiple Books:**
+```json
+{
+  "success": false,
+  "workflow": "rotation",
+  "error": {
+    "error": "Multiple books detected in image",
+    "error_code": "MULTIPLE_BOOKS",
+    "book_count": 3,
+    "context": {
+      "suggestion": "Crop the image to show only one book, or upload separate images for each book"
+    }
+  }
+}
+```
+
+**Error (400 Bad Request) - Invalid Workflow:**
+```json
+{
+  "error": "Invalid workflow",
+  "workflow": "invalid",
+  "valid_workflows": ["rotation", "crop", "health_assessment", "full"]
+}
+```
+
 ### Health Check
 
 ```
@@ -232,6 +340,47 @@ function getImageUrl(imageId: string) {
   return `${API_BASE}/api/images/${imageId}/blob`;
 }
 
+async function deleteImage(imageId: string) {
+  const response = await fetch(`${API_BASE}/api/images/${imageId}`, {
+    method: "DELETE",
+  });
+  
+  if (response.status === 204) {
+    return true; // Successfully deleted
+  }
+  
+  if (response.status === 404) {
+    throw new Error("Image not found");
+  }
+  
+  throw new Error("Failed to delete image");
+}
+
+type Workflow = "rotation" | "crop" | "health_assessment" | "full";
+
+async function processImage(imageId: string, workflow: Workflow) {
+  const response = await fetch(`${API_BASE}/api/images/${imageId}/process`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workflow }),
+  });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    // Handle specific error codes
+    if (data.error?.error_code === "NO_BOOK") {
+      throw new Error("No book detected in image");
+    }
+    if (data.error?.error_code === "MULTIPLE_BOOKS") {
+      throw new Error(`Multiple books detected: ${data.error.book_count}`);
+    }
+    throw new Error(data.error?.error || "Processing failed");
+  }
+  
+  return data;
+}
+
 // Usage:
 // const result = await uploadImage(fileInput.files[0]);
 // console.log("Uploaded:", result.image_id);
@@ -243,6 +392,15 @@ function getImageUrl(imageId: string) {
 // allImages.forEach(img => {
 //   console.log(`Image ${img.image_id}: ${img.content_type}, ${img.byte_size} bytes`);
 // });
+//
+// // Delete an image
+// await deleteImage(imageId);
+//
+// // Process an image (rotate to correct orientation)
+// const processResult = await processImage(imageId, "rotation");
+// if (processResult.success && processResult.result.rotated) {
+//   console.log(`Image rotated ${processResult.result.rotation_degrees} degrees`);
+// }
 ```
 
 ## React Component Example

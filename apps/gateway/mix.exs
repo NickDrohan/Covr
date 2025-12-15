@@ -43,6 +43,9 @@ defmodule Gateway.MixProject do
       {:prometheus_phoenix, "~> 1.3"},
       {:prometheus_process_collector, "~> 1.5"},
 
+      # Image processing
+      {:mogrify, "~> 0.9"},
+
       # Sibling app dependency
       {:image_store, in_umbrella: true},
 

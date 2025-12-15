@@ -49,6 +49,24 @@ defmodule ImageStore.Media.Image do
     |> unique_constraint(:sha256, name: :media_images_sha256_index)
   end
 
+  @doc """
+  Changeset for updating an existing image (e.g., after processing).
+  Allows updating bytes, dimensions, and recalculated hashes.
+  """
+  def update_changeset(image, attrs) do
+    image
+    |> cast(attrs, [
+      :bytes,
+      :byte_size,
+      :sha256,
+      :width,
+      :height,
+      :pipeline_status
+    ])
+    |> validate_required([:bytes, :byte_size, :sha256])
+    |> unique_constraint(:sha256, name: :media_images_sha256_index)
+  end
+
   defp validate_content_type(changeset) do
     validate_change(changeset, :content_type, fn :content_type, content_type ->
       if String.starts_with?(content_type, "image/") do

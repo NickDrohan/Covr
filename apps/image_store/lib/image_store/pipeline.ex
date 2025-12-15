@@ -270,6 +270,27 @@ defmodule ImageStore.Pipeline do
     }
   end
 
+  @doc """
+  Deletes all pipeline executions and steps for an image.
+  Used when deleting an image to clean up associated data.
+  """
+  def delete_executions_for_image(image_id) do
+    # Get all execution IDs for this image
+    execution_ids =
+      from(e in Execution, where: e.image_id == ^image_id, select: e.id)
+      |> Repo.all()
+
+    # Delete steps first (they reference executions)
+    from(s in Step, where: s.execution_id in ^execution_ids)
+    |> Repo.delete_all()
+
+    # Delete executions
+    from(e in Execution, where: e.image_id == ^image_id)
+    |> Repo.delete_all()
+
+    :ok
+  end
+
   # ============================================================================
   # Private
   # ============================================================================

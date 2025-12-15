@@ -32,6 +32,10 @@ defmodule Gateway.Router do
     get "/images/:id", ImageController, :show
     get "/images/:id/blob", ImageController, :blob
     get "/images/:id/pipeline", ImageController, :pipeline
+
+    # Admin image management
+    delete "/images/:id", ImageController, :delete
+    post "/images/:id/process", ImageController, :process
   end
 
   # Metrics endpoint (no auth required, but can be restricted in production)

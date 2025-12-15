@@ -117,6 +117,110 @@ defmodule Gateway.ImageController do
     end
   end
 
+  @doc """
+  DELETE /api/images/:id
+  Deletes an image and its associated pipeline data.
+  """
+  def delete(conn, %{"id" => id}) do
+    case ImageStore.delete_image(id) do
+      {:ok, _image} ->
+        send_resp(conn, :no_content, "")
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "Image not found"})
+
+      {:error, :delete_failed} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to delete image"})
+    end
+  end
+
+  @doc """
+  POST /api/images/:id/process
+  Triggers a specific processing workflow on an image.
+
+  Body: { "workflow": "rotation" | "crop" | "health_assessment" | "full" }
+
+  - rotation: Detects book, validates single book, rotates to correct orientation
+  - crop: Crops image to focus on the book
+  - health_assessment: Assesses book condition
+  - full: Triggers full async pipeline
+  """
+  def process(conn, %{"id" => id} = params) do
+    workflow = Map.get(params, "workflow")
+
+    if is_nil(workflow) do
+      conn
+      |> put_status(:bad_request)
+      |> json(%{
+        error: "Missing 'workflow' parameter",
+        valid_workflows: Gateway.Pipeline.valid_workflows()
+      })
+    else
+      case Gateway.Pipeline.process_workflow(id, workflow) do
+        {:ok, result} ->
+          # Get updated image metadata
+          case ImageStore.get_image(id) do
+            {:ok, image} ->
+              json(conn, %{
+                success: true,
+                workflow: workflow,
+                result: result,
+                image: ImageStore.to_json_response(image)
+              })
+
+            {:error, :not_found} ->
+              # Image was processed but can't be found (shouldn't happen)
+              json(conn, %{
+                success: true,
+                workflow: workflow,
+                result: result
+              })
+          end
+
+        {:error, %{error_code: "NO_BOOK"} = error} ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(%{
+            success: false,
+            workflow: workflow,
+            error: error
+          })
+
+        {:error, %{error_code: "MULTIPLE_BOOKS"} = error} ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(%{
+            success: false,
+            workflow: workflow,
+            error: error
+          })
+
+        {:error, %{error: "Image not found"}} ->
+          conn
+          |> put_status(:not_found)
+          |> json(%{error: "Image not found"})
+
+        {:error, %{error: "Invalid workflow"} = error} ->
+          conn
+          |> put_status(:bad_request)
+          |> json(error)
+
+        {:error, error} ->
+          conn
+          |> put_status(:internal_server_error)
+          |> json(%{
+            success: false,
+            workflow: workflow,
+            error: error
+          })
+      end
+    end
+  end
+
   # Format pipeline execution for JSON response
   defp format_execution_response(execution) do
     %{

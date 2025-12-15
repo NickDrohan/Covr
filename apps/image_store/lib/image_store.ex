@@ -113,6 +113,89 @@ defmodule ImageStore do
   end
 
   @doc """
+  Checks if an image with the given SHA-256 hash already exists, excluding a specific image ID.
+  Used when updating an image to allow the same hash if it's the same image.
+  """
+  @spec duplicate_exists?(binary(), binary()) :: boolean()
+  def duplicate_exists?(sha256, exclude_id) when is_binary(sha256) and is_binary(exclude_id) do
+    query = from i in Image, where: i.sha256 == ^sha256 and i.id != ^exclude_id, select: 1, limit: 1
+    Repo.one(query) != nil
+  end
+
+  @doc """
+  Deletes an image by ID.
+  Also deletes associated pipeline executions and steps.
+
+  ## Returns
+    - {:ok, image} if deleted successfully
+    - {:error, :not_found} if image doesn't exist
+  """
+  @spec delete_image(binary()) :: {:ok, Image.t()} | {:error, :not_found}
+  def delete_image(id) when is_binary(id) do
+    case Repo.get(Image, id) do
+      nil ->
+        {:error, :not_found}
+
+      image ->
+        # Delete associated pipeline executions first
+        ImageStore.Pipeline.delete_executions_for_image(id)
+
+        # Delete the image
+        case Repo.delete(image) do
+          {:ok, deleted_image} -> {:ok, deleted_image}
+          {:error, _changeset} -> {:error, :delete_failed}
+        end
+    end
+  end
+
+  @doc """
+  Updates an image's bytes after processing (e.g., rotation, cropping).
+  Recalculates SHA-256 and byte_size. Optionally updates dimensions.
+
+  ## Parameters
+    - id: Image UUID
+    - new_bytes: New binary image data
+    - opts: Optional fields
+      - :width - New width
+      - :height - New height
+
+  ## Returns
+    - {:ok, image} on success
+    - {:error, :not_found} if image doesn't exist
+    - {:error, :duplicate} if new SHA-256 matches another image
+  """
+  @spec update_image_bytes(binary(), binary(), keyword()) ::
+          {:ok, Image.t()} | {:error, :not_found | :duplicate}
+  def update_image_bytes(id, new_bytes, opts \\ []) when is_binary(id) and is_binary(new_bytes) do
+    case Repo.get(Image, id) do
+      nil ->
+        {:error, :not_found}
+
+      image ->
+        new_sha256 = :crypto.hash(:sha256, new_bytes)
+
+        # Check for duplicate (excluding current image)
+        if duplicate_exists?(new_sha256, id) do
+          {:error, :duplicate}
+        else
+          attrs = %{
+            bytes: new_bytes,
+            byte_size: byte_size(new_bytes),
+            sha256: new_sha256,
+            width: Keyword.get(opts, :width),
+            height: Keyword.get(opts, :height)
+          }
+          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+          |> Map.new()
+
+          image
+          |> Image.update_changeset(attrs)
+          |> Repo.update()
+        end
+    end
+  end
+
+  @doc """
   Lists all images (excludes binary data for efficiency).
   Returns images ordered by created_at descending (newest first).
   """

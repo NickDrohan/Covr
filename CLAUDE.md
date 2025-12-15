@@ -125,24 +125,45 @@ For small scale: Postgres-backed event table or simple pub/sub. For larger scale
 
 Covr is implemented as an Elixir umbrella application with Phoenix. Current apps:
 
-### `gateway` (Phoenix API)
-HTTP interface exposing REST endpoints. Delegates to sibling apps for business logic.
+### `gateway` (Phoenix API + Admin Dashboard)
+HTTP interface exposing REST endpoints and real-time monitoring dashboard. Includes Oban-powered async image processing pipeline with pluggable AI processing steps.
+
+**Features**:
+- REST API for image upload and retrieval
+- Admin dashboard with Phoenix LiveView (real-time updates)
+- Prometheus metrics endpoint
+- Async pipeline processing with Oban
+- Telemetry and monitoring
 
 **Endpoints**:
-- `POST /api/images` - Upload cover image
+- `POST /api/images` - Upload cover image (triggers async pipeline)
 - `GET /api/images/:id` - Get image metadata
 - `GET /api/images/:id/blob` - Download image blob
+- `GET /api/images/:id/pipeline` - Get pipeline execution status
+- `GET /images` - List all images
+- `GET /admin` - Admin dashboard (LiveView)
+- `GET /metrics` - Prometheus metrics endpoint
 
 **Port**: 4000 (dev)
 
+**Key modules**:
+- `Gateway.ImageController` - Image upload/retrieval endpoints
+- `Gateway.AdminDashboardLive` - Real-time monitoring dashboard
+- `Gateway.Pipeline.Executor` - Pipeline orchestration
+- `Gateway.Pipeline.Workers.ProcessImageWorker` - Oban worker for async processing
+- Pipeline steps (pluggable): `BookIdentification`, `ImageCropping`, `HealthAssessment`
+
 ### `image_store` (Ecto + Business Logic)
-Image storage and deduplication logic. Uses Ecto for database access.
+Image storage and pipeline tracking. Uses Ecto for database access and schema management.
 
 **Key modules**:
 - `ImageStore.Media.Image` - Image schema and changesets
+- `ImageStore.Pipeline` - Pipeline execution context
+- `ImageStore.Pipeline.Execution` - Pipeline execution record schema
+- `ImageStore.Pipeline.Step` - Individual step record schema
 - `ImageStore.Repo` - Ecto repository
 
-**Current implementation**: Stores images as BLOBs in Postgres (will migrate to S3/MinIO later)
+**Current implementation**: Stores images as BLOBs in Postgres (will migrate to S3/MinIO later). Pipeline execution and step results are persisted for monitoring and debugging.
 
 ## Development Commands
 
@@ -328,6 +349,38 @@ For event-driven patterns, use:
 - Postgres NOTIFY/LISTEN via Ecto
 - NATS (larger scale, planned)
 
+### Oban Job Processing
+
+Oban is configured for async pipeline processing of uploaded images:
+
+**Configuration** (in `config/config.exs`):
+```elixir
+config :gateway, Oban,
+  repo: ImageStore.Repo,
+  queues: [pipeline: 10],
+  plugins: [Oban.Plugins.Pruner]
+```
+
+**Key components**:
+- **Worker**: `Gateway.Pipeline.Workers.ProcessImageWorker` - Processes images through the pipeline
+- **Queue**: `pipeline` queue with concurrency of 10
+- **Persistence**: Jobs stored in `oban_jobs` table (managed by Oban)
+- **Retries**: Automatic retry on failure with exponential backoff
+- **Pruner**: Automatically removes completed/discarded jobs after retention period
+
+**Usage pattern**:
+1. Image uploaded via `POST /api/images`
+2. Image stored in database
+3. Oban job enqueued to `pipeline` queue
+4. Worker executes pipeline steps sequentially
+5. Each step result persisted to `pipeline_steps` table
+6. Final status updated in `pipeline_executions` table
+
+**Monitoring**:
+- View job queue status in admin dashboard (`/admin`)
+- Query `oban_jobs` table directly for job details
+- Check Prometheus metrics at `/metrics`
+
 ### Database Schemas
 
 **Important**: There are two database schema definitions in this project:
@@ -337,10 +390,10 @@ For event-driven patterns, use:
 2. **Ecto migrations** (`apps/*/priv/repo/migrations/`): Incremental migrations applied by Ecto. Currently only implements `media_images` table.
 
 **Current state**: The following tables exist:
-- `media_images` - Image storage with pipeline_status
-- `pipeline_executions` - Tracks full pipeline runs
-- `pipeline_steps` - Individual step execution results
-- `oban_jobs` - Oban job queue
+- `media_images` - Image storage with SHA-256 hash, content type, and pipeline_status
+- `pipeline_executions` - Tracks full pipeline runs (status, timing, error messages)
+- `pipeline_steps` - Individual step execution results (output data, duration, errors)
+- `oban_jobs` - Oban job queue (managed by Oban, stores async job state)
 
 The full `database/schema.sql` with schema namespaces will be implemented incrementally as new engine apps are added.
 
@@ -419,46 +472,70 @@ Covr/
 └── CLAUDE.md                          # This file
 ```
 
+## Deployment
+
+For comprehensive deployment documentation including Fly.io configuration, production setup, and monitoring, see `HANDOFF.md`. Key deployment resources:
+- Production URL and configuration
+- API endpoint documentation
+- Pipeline step implementation details
+- Monitoring and debugging guides
+- Prometheus metrics and alerting
+
 ## Next Implementation Steps
 
-Based on the current state, these are the logical next steps:
+### ✅ Completed
+- Async image processing pipeline (Oban-powered)
+- Admin dashboard with real-time monitoring (Phoenix LiveView)
+- Prometheus metrics endpoint with comprehensive instrumentation
+- Pipeline execution tracking and persistence
+- Three-step processing pipeline (placeholder implementations)
+
+### 🚧 In Progress / Next Steps
 
 1. **Integrate Real AI Services for Pipeline Steps**
    - Replace placeholder implementations with actual AI service calls
-   - Options: OpenAI Vision API, Google Cloud Vision, AWS Rekognition
+   - Options: OpenAI Vision API, Google Cloud Vision, AWS Rekognition, custom ML models
    - Update step modules in `apps/gateway/lib/gateway/pipeline/steps/`
+   - Steps to integrate: `BookIdentification`, `ImageCropping`, `HealthAssessment`
+   - See `HANDOFF.md` for integration guidance
 
 2. **Migrate image storage to MinIO/S3**
    - Update `ImageStore.Media.Image` to store object keys instead of BLOBs
    - Add ExAws or similar S3 client library
    - Create migration to backfill existing images
+   - Update pipeline steps to work with S3 URLs
 
 3. **Implement remaining engines as separate apps**
    - `apps/contact` - User and channel management
-   - `apps/catalog` - Books and copies
-   - `apps/ingest` - OCR, identification, deduplication
+   - `apps/catalog` - Books and copies (abstract works + physical items)
+   - `apps/ingest` - OCR, identification, deduplication (integrate current pipeline)
    - `apps/exchange` - Requests, transfers, ledger
 
 4. **Add event bus for cross-engine communication**
    - `Phoenix.PubSub` is already configured
-   - Topics: `image_uploaded`, `book_identified`, `exchange_completed`
+   - Define event topics: `image_uploaded`, `book_identified`, `exchange_completed`
    - Each app subscribes to relevant topics
+   - Implement event handlers in respective apps
 
 5. **Integrate Meilisearch**
-   - Add Meilisearch client library
+   - Add Meilisearch client library (e.g., `meilisearch-elixir`)
    - Create search sync worker in `apps/search` (new app)
-   - Subscribe to copy/book change events
+   - Index `catalog.copy` JOIN `catalog.book` data
+   - Subscribe to copy/book change events for real-time sync
 
 6. **Integrate Qdrant for vector similarity**
    - Add Qdrant client library
-   - Generate embeddings on image upload
-   - Query for deduplication and visual search
+   - Generate embeddings on image upload (use in pipeline step)
+   - Store embeddings in Qdrant
+   - Query for deduplication and visual search (perceptual similarity)
 
 7. **Implement hash-chained ledger**
    - Create `apps/exchange` app
    - Implement ledger append logic with hash verification
-   - Add background job to verify chain integrity
+   - Add background job to verify chain integrity periodically
+   - Ensure all exchanges write to ledger (enforce at app level)
 
 8. **Add Authentication to Admin Dashboard**
-   - Implement basic auth or session-based login
+   - Implement basic auth or session-based login for `/admin`
    - Add authorization for admin-only routes
+   - Consider API key authentication for `/metrics` in production

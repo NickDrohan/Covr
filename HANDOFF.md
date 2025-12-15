@@ -2,7 +2,7 @@
 
 **Last Updated:** December 15, 2024  
 **Deployed At:** `https://covr-gateway.fly.dev`  
-**Status:** Production-ready with async processing pipeline and admin dashboard
+**Status:** Production-ready with async processing pipeline, admin dashboard, and admin API
 
 ---
 
@@ -49,6 +49,23 @@ The Covr Gateway is an Elixir/Phoenix umbrella application that provides:
 ---
 
 ## What's New (December 15, 2024)
+
+### Admin API for Image Management
+New REST API endpoints for Lovable frontend to manage images:
+- **DELETE `/api/images/:id`** - Delete images and associated pipeline data
+- **POST `/api/images/:id/process`** - Manually trigger processing workflows
+
+**Available Workflows:**
+- `rotation` - Detects book, validates single book, rotates to correct text orientation
+- `crop` - Crops image to focus on the book
+- `health_assessment` - Assesses book condition
+- `full` - Triggers the full async pipeline
+
+**Image Rotation Features:**
+- Validates exactly 1 book in image (returns error if 0 or multiple)
+- Detects text orientation and rotates so text reads left-to-right, top-to-bottom
+- Replaces original image with rotated version
+- Uses ImageMagick (Mogrify) for rotation
 
 ### Admin Dashboard
 - **URL:** `https://covr-gateway.fly.dev/admin`
@@ -229,7 +246,62 @@ GET /images
 Response (200): Array of image metadata
 ```
 
-### 6. Health Check
+### 6. Delete Image
+
+```
+DELETE /api/images/:id
+
+Response (204): No Content - Image deleted successfully
+Response (404): {"error": "Image not found"}
+```
+
+Deletes the image and all associated pipeline executions and steps.
+
+### 7. Process Image (Manual Workflow)
+
+```
+POST /api/images/:id/process
+Content-Type: application/json
+
+Body:
+{
+  "workflow": "rotation" | "crop" | "health_assessment" | "full"
+}
+
+Response (200):
+{
+  "success": true,
+  "workflow": "rotation",
+  "result": {
+    "rotated": true,
+    "rotation_degrees": 90,
+    "book_detection": {...},
+    "text_orientation": {...},
+    "image_updated": true
+  },
+  "image": {...}
+}
+
+Response (422 - No book):
+{
+  "success": false,
+  "error": {
+    "error_code": "NO_BOOK",
+    "context": {"suggestion": "..."}
+  }
+}
+
+Response (422 - Multiple books):
+{
+  "success": false,
+  "error": {
+    "error_code": "MULTIPLE_BOOKS",
+    "book_count": 3
+  }
+}
+```
+
+### 9. Health Check
 
 ```
 GET /healthz
@@ -237,7 +309,7 @@ GET /healthz
 Response (200): {"status": "ok"}
 ```
 
-### 7. Admin Dashboard
+### 10. Admin Dashboard
 
 ```
 GET /admin
@@ -245,7 +317,7 @@ GET /admin
 Returns: LiveView HTML dashboard
 ```
 
-### 8. Prometheus Metrics
+### 11. Prometheus Metrics
 
 ```
 GET /metrics
@@ -262,6 +334,24 @@ See `docs/PROMETHEUS.md` for complete metrics documentation.
 ### Current Steps (Placeholder)
 
 Each step is implemented as an Elixir module following `Gateway.Pipeline.StepBehaviour`:
+
+#### 0. Image Rotation (`apps/gateway/lib/gateway/pipeline/steps/image_rotation.ex`)
+Standalone step for manual rotation workflow (not part of auto pipeline).
+```elixir
+# Returns:
+%{
+  rotated: true,
+  rotation_degrees: 90,
+  book_detection: %{book_count: 1, books: [...]},
+  text_orientation: %{current_orientation: 90, confidence: 0.9},
+  image_updated: true,
+  placeholder: true  # AI detection not yet integrated
+}
+
+# Errors:
+{:error, {:no_book, %{suggestion: "..."}}}
+{:error, {:multiple_books, 3, %{suggestion: "..."}}}
+```
 
 #### 1. Book Identification (`apps/gateway/lib/gateway/pipeline/steps/book_identification.ex`)
 ```elixir
@@ -442,6 +532,10 @@ The gateway emits these telemetry events:
 - **Oban Worker:** `apps/gateway/lib/gateway/pipeline/workers/process_image_worker.ex`
 - **Step Behaviour:** `apps/gateway/lib/gateway/pipeline/step_behaviour.ex`
 - **Steps:** `apps/gateway/lib/gateway/pipeline/steps/`
+  - `book_identification.ex` - Detect if image is a book
+  - `image_cropping.ex` - Crop image to book boundaries
+  - `health_assessment.ex` - Assess book condition
+  - `image_rotation.ex` - Rotate image for correct text orientation
 - **Telemetry:** `apps/gateway/lib/gateway/telemetry.ex`
 
 ### Image Store App

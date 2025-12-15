@@ -95,9 +95,28 @@ defmodule Gateway.ImageController do
   @doc """
   GET /images
   Returns list of all images (metadata only, no binary data).
+
+  Query parameters:
+    - limit: Maximum number of images to return (integer)
+    - offset: Number of images to skip for pagination (integer)
+    - order_by: Field to order by (default: "created_at")
+    - order: Order direction - "asc" or "desc" (default: "desc")
+
+  Examples:
+    GET /images
+    GET /images?limit=10
+    GET /images?limit=10&offset=10
+    GET /images?limit=20&order_by=created_at&order=asc
   """
-  def index(conn, _params) do
-    images = ImageStore.list_images()
+  def index(conn, params) do
+    opts = [
+      limit: parse_limit(params),
+      offset: parse_offset(params),
+      order_by: parse_order_by(params),
+      order_direction: parse_order_direction(params)
+    ]
+
+    images = ImageStore.list_images(opts)
     json(conn, Enum.map(images, &ImageStore.to_json_response/1))
   end
 
@@ -305,5 +324,48 @@ defmodule Gateway.ImageController do
         String.replace(acc, "%{#{key}}", to_string(value))
       end)
     end)
+  end
+
+  # Parse limit query parameter
+  defp parse_limit(params) do
+    case Map.get(params, "limit") do
+      nil -> nil
+      limit_str ->
+        case Integer.parse(limit_str) do
+          {limit, _} when limit > 0 -> limit
+          _ -> nil
+        end
+    end
+  end
+
+  # Parse offset query parameter
+  defp parse_offset(params) do
+    case Map.get(params, "offset") do
+      nil -> nil
+      offset_str ->
+        case Integer.parse(offset_str) do
+          {offset, _} when offset >= 0 -> offset
+          _ -> nil
+        end
+    end
+  end
+
+  # Parse order_by query parameter (default: created_at)
+  defp parse_order_by(params) do
+    case Map.get(params, "order_by") do
+      nil -> :created_at
+      field_str when field_str in ["created_at", "byte_size", "kind"] ->
+        String.to_existing_atom(field_str)
+      _ -> :created_at
+    end
+  end
+
+  # Parse order direction query parameter (default: desc)
+  defp parse_order_direction(params) do
+    case Map.get(params, "order") do
+      "asc" -> :asc
+      "desc" -> :desc
+      _ -> :desc
+    end
   end
 end

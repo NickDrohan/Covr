@@ -4,6 +4,24 @@
 
 **Status:** Deployed and running
 
+## Pagination Notes for Edge Functions
+
+When calling `GET /images` from edge functions (e.g., Supabase Edge Functions), consider using pagination parameters to avoid response size limits:
+
+- Use `?limit=100` to fetch images in batches
+- Use `?offset=N` for subsequent pages
+- Example: Fetch all images with pagination:
+  ```
+  GET /images?limit=100&offset=0   # First 100 images
+  GET /images?limit=100&offset=100 # Next 100 images
+  GET /images?limit=100&offset=200 # Next 100 images
+  ```
+
+If you need all images and the total count is unknown, you can:
+1. Start with `GET /images?limit=100`
+2. If you get exactly 100 results, fetch the next page with `offset=100`
+3. Continue until you get fewer than `limit` results (indicating the last page)
+
 ## Endpoints
 
 ### Upload Image
@@ -45,7 +63,21 @@ Content-Type: multipart/form-data
 GET /images
 ```
 
-Returns a list of all images (metadata only, no binary data). Ordered by creation date (newest first).
+Returns a list of all images (metadata only, no binary data). Ordered by creation date (newest first) by default.
+
+**Query Parameters (all optional):**
+- `limit` (integer): Maximum number of images to return. Must be > 0.
+- `offset` (integer): Number of images to skip for pagination. Must be >= 0.
+- `order_by` (string): Field to order by. Valid values: `created_at`, `byte_size`, `kind`. Default: `created_at`.
+- `order` (string): Order direction. Valid values: `asc`, `desc`. Default: `desc`.
+
+**Examples:**
+```
+GET /images                    # Returns all images (newest first)
+GET /images?limit=10           # Returns first 10 images
+GET /images?limit=10&offset=10 # Returns next 10 images (pagination)
+GET /images?limit=20&order_by=byte_size&order=asc  # Returns 20 smallest images
+```
 
 **Response (200 OK):**
 ```json
@@ -324,8 +356,15 @@ async function uploadImage(file: File, kind = "cover_front") {
   return response.json();
 }
 
-async function listAllImages() {
-  const response = await fetch(`${API_BASE}/images`);
+async function listAllImages(options = {}) {
+  const params = new URLSearchParams();
+  if (options.limit) params.append("limit", options.limit.toString());
+  if (options.offset) params.append("offset", options.offset.toString());
+  if (options.orderBy) params.append("order_by", options.orderBy);
+  if (options.order) params.append("order", options.order);
+  
+  const url = `${API_BASE}/images${params.toString() ? `?${params.toString()}` : ""}`;
+  const response = await fetch(url);
   if (!response.ok) throw new Error("Failed to fetch images");
   return response.json();
 }
@@ -391,6 +430,19 @@ async function processImage(imageId: string, workflow: Workflow) {
 // console.log(`Found ${allImages.length} images`);
 // allImages.forEach(img => {
 //   console.log(`Image ${img.image_id}: ${img.content_type}, ${img.byte_size} bytes`);
+// });
+//
+// // List images with pagination
+// const firstPage = await listAllImages({ limit: 10 });
+// const secondPage = await listAllImages({ limit: 10, offset: 10 });
+// console.log(`First page: ${firstPage.length} images`);
+// console.log(`Second page: ${secondPage.length} images`);
+//
+// // List images ordered by size (smallest first)
+// const smallestImages = await listAllImages({ 
+//   limit: 20, 
+//   orderBy: "byte_size", 
+//   order: "asc" 
 // });
 //
 // // Delete an image

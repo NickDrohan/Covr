@@ -198,19 +198,56 @@ defmodule ImageStore do
   @doc """
   Lists all images (excludes binary data for efficiency).
   Returns images ordered by created_at descending (newest first).
+
+  ## Options
+    - :limit - Maximum number of images to return
+    - :offset - Number of images to skip (for pagination)
+    - :order_by - Field to order by (default: :created_at)
+    - :order_direction - :asc or :desc (default: :desc)
+
+  ## Examples
+      # Get all images (default behavior)
+      ImageStore.list_images()
+
+      # Get first 10 images
+      ImageStore.list_images(limit: 10)
+
+      # Get next 10 images (pagination)
+      ImageStore.list_images(limit: 10, offset: 10)
   """
-  @spec list_images() :: [Image.t()]
-  def list_images do
+  @spec list_images(keyword()) :: [Image.t()]
+  def list_images(opts \\ []) do
+    order_by_field = Keyword.get(opts, :order_by, :created_at)
+    order_direction = Keyword.get(opts, :order_direction, :desc)
+
     query =
-      from i in Image,
-        order_by: [desc: i.created_at],
-        select: %{
-          i
-          | bytes: nil
-        }
+      Image
+      |> order_by(^build_order_by(order_by_field, order_direction))
+      |> select([i], %{i | bytes: nil})
+      |> maybe_limit(opts[:limit])
+      |> maybe_offset(opts[:offset])
 
     Repo.all(query)
   end
+
+  # Build order_by clause dynamically
+  defp build_order_by(field, direction) when direction in [:asc, :desc] do
+    [{direction, field}]
+  end
+
+  # Apply limit if provided
+  defp maybe_limit(query, nil), do: query
+  defp maybe_limit(query, limit) when is_integer(limit) and limit > 0 do
+    limit(query, ^limit)
+  end
+  defp maybe_limit(query, _), do: query
+
+  # Apply offset if provided
+  defp maybe_offset(query, nil), do: query
+  defp maybe_offset(query, offset) when is_integer(offset) and offset >= 0 do
+    offset(query, ^offset)
+  end
+  defp maybe_offset(query, _), do: query
 
   @doc """
   Formats image metadata for JSON response.

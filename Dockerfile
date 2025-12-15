@@ -10,8 +10,8 @@ ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 
 FROM ${BUILDER_IMAGE} as builder
 
-# Install build dependencies
-RUN apt-get update -y && apt-get install -y build-essential git \
+# Install build dependencies (including erlang-dev for NIF compilation)
+RUN apt-get update -y && apt-get install -y build-essential git erlang-dev \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 WORKDIR /app
@@ -52,7 +52,7 @@ RUN mix release covr
 FROM ${RUNNER_IMAGE}
 
 RUN apt-get update -y && \
-    apt-get install -y libstdc++6 openssl libncurses5 locales ca-certificates \
+    apt-get install -y libstdc++6 openssl libncurses5 locales ca-certificates imagemagick \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 # Set the locale

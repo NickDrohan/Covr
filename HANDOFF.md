@@ -60,6 +60,19 @@ The Covr Gateway is an Elixir/Phoenix umbrella application that provides:
   - Recent pipeline executions with step status
   - API endpoint documentation
 
+### Prometheus Metrics
+- **URL:** `https://covr-gateway.fly.dev/metrics`
+- Comprehensive metrics for monitoring and alerting
+- Exposes metrics for:
+  - HTTP requests (latency, status codes, errors)
+  - Pipeline executions and steps
+  - Image uploads
+  - Oban job queue
+  - Database connection pool
+  - System health
+- See `docs/PROMETHEUS.md` for full metrics documentation
+- See `docs/PROMETHEUS_ALERTS.md` for alerting rules
+
 ### Internal Pipeline Processing
 - Replaced external microservice calls with internal Elixir modules
 - Uses Oban for reliable async job processing
@@ -231,6 +244,16 @@ GET /admin
 
 Returns: LiveView HTML dashboard
 ```
+
+### 8. Prometheus Metrics
+
+```
+GET /metrics
+
+Returns: Prometheus-formatted metrics (text/plain)
+```
+
+See `docs/PROMETHEUS.md` for complete metrics documentation.
 
 ---
 
@@ -437,6 +460,8 @@ The gateway emits these telemetry events:
 
 ### Documentation
 - **API Docs:** `docs/API.md`
+- **Prometheus Metrics:** `docs/PROMETHEUS.md`
+- **Alerting Rules:** `docs/PROMETHEUS_ALERTS.md`
 - **Architecture:** `CLAUDE.md`
 - **Database Schema:** `database/schema.sql`
 

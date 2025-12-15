@@ -10,6 +10,10 @@ config :gateway, Oban,
   queues: [pipeline: 10],
   plugins: [Oban.Plugins.Pruner]
 
+# Prometheus configuration
+config :prometheus, Gateway.Metrics,
+  duration_unit: :seconds
+
 # Phoenix PubSub for LiveView
 config :gateway, :pubsub, name: Gateway.PubSub
 

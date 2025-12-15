@@ -38,6 +38,10 @@ defmodule Gateway.MixProject do
       {:corsica, "~> 2.1"},
       {:oban, "~> 2.17"},
       {:req, "~> 0.5"},
+      {:prometheus_ex, "~> 3.1"},
+      {:prometheus_plugs, "~> 1.1"},
+      {:prometheus_phoenix, "~> 1.3"},
+      {:prometheus_process_collector, "~> 1.5"},
 
       # Sibling app dependency
       {:image_store, in_umbrella: true},

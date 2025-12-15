@@ -61,10 +61,19 @@ defmodule Gateway.Pipeline.Executor do
       {:ok, exec, final_metadata} ->
         {:ok, execution} = Pipeline.complete_execution(exec)
 
+        # Calculate duration
+        duration_seconds =
+          if execution.started_at do
+            DateTime.diff(DateTime.utc_now(), execution.started_at, :millisecond) / 1000.0
+          else
+            0.0
+          end
+
         emit_telemetry(:stop, %{
           execution_id: execution.id,
           image_id: execution.image_id,
-          status: :completed
+          status: :completed,
+          duration_seconds: duration_seconds
         })
 
         Logger.info("Pipeline execution completed successfully",
@@ -78,11 +87,20 @@ defmodule Gateway.Pipeline.Executor do
         error_message = format_error(reason)
         {:ok, execution} = Pipeline.fail_execution(exec, error_message)
 
+        # Calculate duration
+        duration_seconds =
+          if execution.started_at do
+            DateTime.diff(DateTime.utc_now(), execution.started_at, :millisecond) / 1000.0
+          else
+            0.0
+          end
+
         emit_telemetry(:stop, %{
           execution_id: execution.id,
           image_id: execution.image_id,
           status: :failed,
-          error: error_message
+          error: error_message,
+          duration_seconds: duration_seconds
         })
 
         Logger.error("Pipeline execution failed",

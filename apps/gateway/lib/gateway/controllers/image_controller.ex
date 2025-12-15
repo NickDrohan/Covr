@@ -13,6 +13,10 @@ defmodule Gateway.ImageController do
     with {:ok, upload} <- get_upload(params),
          {:ok, bytes} <- read_upload(upload),
          {:ok, image} <- create_image(bytes, upload.content_type, params) do
+      # Record Prometheus metrics
+      kind = Map.get(params, "kind", "cover_front")
+      Gateway.Metrics.record_image_upload(kind, "success", image.byte_size)
+
       # Trigger async pipeline processing
       Gateway.Pipeline.process_image(image.id)
 
@@ -31,6 +35,11 @@ defmodule Gateway.ImageController do
         |> json(%{error: "Failed to read uploaded file"})
 
       {:error, :duplicate} ->
+        # Record Prometheus metrics
+        Gateway.Metrics.record_image_duplicate()
+        kind = Map.get(params, "kind", "cover_front")
+        Gateway.Metrics.record_image_upload(kind, "duplicate", 0)
+
         conn
         |> put_status(:conflict)
         |> json(%{error: "Image already exists (duplicate SHA-256)"})

@@ -34,6 +34,11 @@ defmodule Gateway.Router do
     get "/images/:id/pipeline", ImageController, :pipeline
   end
 
+  # Metrics endpoint (no auth required, but can be restricted in production)
+  scope "/", Gateway do
+    get "/metrics", MetricsController, :index
+  end
+
   # Non-API endpoints
   scope "/", Gateway do
     pipe_through :api

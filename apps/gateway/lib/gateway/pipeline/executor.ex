@@ -10,10 +10,10 @@ defmodule Gateway.Pipeline.Executor do
 
   require Logger
 
-  alias Gateway.Pipeline.Steps.{BookIdentification, ImageCropping, HealthAssessment}
+  alias Gateway.Pipeline.Steps.{OcrExtraction, BookIdentification, ImageCropping, HealthAssessment}
   alias ImageStore.Pipeline
 
-  @steps [BookIdentification, ImageCropping, HealthAssessment]
+  @steps [OcrExtraction, BookIdentification, ImageCropping, HealthAssessment]
 
   @doc """
   Returns the list of pipeline step modules in execution order.

@@ -13,7 +13,7 @@ defmodule ImageStore.Pipeline.Step do
   @foreign_key_type :binary_id
 
   @valid_statuses ~w(pending running completed failed skipped)
-  @valid_step_names ~w(book_identification image_cropping health_assessment)
+  @valid_step_names ~w(ocr_extraction book_identification image_cropping health_assessment)
 
   schema "pipeline_steps" do
     field :step_name, :string

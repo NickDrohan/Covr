@@ -1,0 +1,37 @@
+# fly.toml app configuration file generated for ocr-parse-service on 2024-01-01T00:00:00Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "ocr-parse-service"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PARSER_MAX_LINES = "80"
+  PARSER_VERIFY_DEFAULT = "true"
+  PARSER_MAX_VERIFY_QUERIES = "6"
+  PARSER_TIMEOUT_S = "10"
+  PARSER_LOG_LEVEL = "INFO"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/healthz"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+

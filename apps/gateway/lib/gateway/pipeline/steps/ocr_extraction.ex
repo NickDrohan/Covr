@@ -124,23 +124,41 @@ defmodule Gateway.Pipeline.Steps.OcrExtraction do
       "content_type" => content_type
     }
 
+    # Track metrics timing
+    start_time = System.monotonic_time(:millisecond)
+
     # Call OCR service
-    case Req.post("#{ocr_url}/v1/ocr",
+    result = Req.post("#{ocr_url}/v1/ocr",
            json: payload,
            receive_timeout: timeout() - 2_000,
            retry: false
-         ) do
+         )
+
+    end_time = System.monotonic_time(:millisecond)
+    duration_seconds = (end_time - start_time) / 1000.0
+
+    case result do
       {:ok, %{status: 200, body: body}} when is_map(body) ->
+        # Record successful call
+        Gateway.Metrics.record_external_service_call("ocr_service", "/v1/ocr", 200, duration_seconds)
         {:ok, body}
 
       {:ok, %{status: 200, body: body}} when is_binary(body) ->
         # Try to parse JSON response
         case Jason.decode(body) do
-          {:ok, parsed} -> {:ok, parsed}
-          {:error, _} -> {:error, "Failed to parse OCR response as JSON"}
+          {:ok, parsed} ->
+            Gateway.Metrics.record_external_service_call("ocr_service", "/v1/ocr", 200, duration_seconds)
+            {:ok, parsed}
+          {:error, _} ->
+            Gateway.Metrics.record_external_service_error("ocr_service", "/v1/ocr", "invalid_json")
+            {:error, "Failed to parse OCR response as JSON"}
         end
 
       {:ok, %{status: status, body: body}} ->
+        # Record failed call with status code
+        Gateway.Metrics.record_external_service_call("ocr_service", "/v1/ocr", status, duration_seconds)
+        Gateway.Metrics.record_external_service_error("ocr_service", "/v1/ocr", "http_#{status}")
+
         error_message =
           if is_map(body) and Map.has_key?(body, "error") do
             get_in(body, ["error", "message"]) || "Unknown error"
@@ -151,12 +169,18 @@ defmodule Gateway.Pipeline.Steps.OcrExtraction do
         {:error, error_message}
 
       {:error, %Req.TransportError{reason: :timeout}} ->
+        Gateway.Metrics.record_external_service_call("ocr_service", "/v1/ocr", 0, duration_seconds)
+        Gateway.Metrics.record_external_service_error("ocr_service", "/v1/ocr", "timeout")
         {:error, "OCR service timeout"}
 
       {:error, %Req.TransportError{reason: reason}} ->
+        Gateway.Metrics.record_external_service_call("ocr_service", "/v1/ocr", 0, duration_seconds)
+        Gateway.Metrics.record_external_service_error("ocr_service", "/v1/ocr", "connection_error")
         {:error, "OCR service connection error: #{inspect(reason)}"}
 
       {:error, error} ->
+        Gateway.Metrics.record_external_service_call("ocr_service", "/v1/ocr", 0, duration_seconds)
+        Gateway.Metrics.record_external_service_error("ocr_service", "/v1/ocr", "unknown_error")
         {:error, "OCR service error: #{inspect(error)}"}
     end
   end

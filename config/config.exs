@@ -4,6 +4,14 @@ import Config
 config :image_store,
   ecto_repos: [ImageStore.Repo]
 
+# Gateway Endpoint configuration
+config :gateway, Gateway.Endpoint,
+  render_errors: [
+    formats: [html: Gateway.ErrorHTML, json: Gateway.ErrorJSON],
+    layout: false
+  ],
+  live_view: [signing_salt: "liveview_gateway_salt_v1"]
+
 # Oban configuration (uses ImageStore.Repo)
 config :gateway, Oban,
   repo: ImageStore.Repo,

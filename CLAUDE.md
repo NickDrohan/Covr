@@ -140,6 +140,9 @@ HTTP interface exposing REST endpoints and real-time monitoring dashboard. Inclu
 - `GET /api/images/:id` - Get image metadata
 - `GET /api/images/:id/blob` - Download image blob
 - `GET /api/images/:id/pipeline` - Get pipeline execution status
+- `POST /api/images/:id/parse` - Parse book metadata from cover (OCR + AI)
+- `POST /api/images/:id/process` - Manually trigger processing workflows
+- `DELETE /api/images/:id` - Delete image and pipeline data
 - `GET /images` - List all images
 - `GET /admin` - Admin dashboard (LiveView)
 - `GET /metrics` - Prometheus metrics endpoint
@@ -147,11 +150,14 @@ HTTP interface exposing REST endpoints and real-time monitoring dashboard. Inclu
 **Port**: 4000 (dev)
 
 **Key modules**:
-- `Gateway.ImageController` - Image upload/retrieval endpoints
+- `Gateway.ImageController` - Image upload/retrieval endpoints + parse API
 - `Gateway.AdminDashboardLive` - Real-time monitoring dashboard
 - `Gateway.Pipeline.Executor` - Pipeline orchestration
 - `Gateway.Pipeline.Workers.ProcessImageWorker` - Oban worker for async processing
-- Pipeline steps (pluggable): `BookIdentification`, `ImageCropping`, `HealthAssessment`
+- `Gateway.Metrics` - Comprehensive Prometheus instrumentation
+- `Gateway.Telemetry` - Telemetry event handlers
+- Pipeline steps (pluggable): `OcrExtraction`, `BookIdentification`, `ImageCropping`, `HealthAssessment`
+- External services: `OcrExtraction` (OCR microservice), `OcrParse` (metadata extraction)
 
 ### `image_store` (Ecto + Business Logic)
 Image storage and pipeline tracking. Uses Ecto for database access and schema management.
@@ -470,6 +476,32 @@ Covr/
 ├── HANDOFF.md                         # Deployment/handoff documentation
 ├── mix.exs                            # Umbrella project definition
 └── CLAUDE.md                          # This file
+```
+
+## Monitoring & Observability
+
+The application has comprehensive Prometheus instrumentation for production monitoring:
+
+- **Metrics Endpoint**: `/metrics` (Prometheus exposition format)
+- **Documentation**: See `docs/PROMETHEUS.md` for complete metrics catalog
+- **Audit Report**: See `docs/PROMETHEUS_AUDIT_REPORT.md` for latest audit findings
+- **Coverage**: HTTP requests, pipeline steps, external services, Oban jobs, database pool, caching
+
+**Key metrics families**:
+- `gateway_http_*` - HTTP request/response metrics
+- `gateway_pipeline_*` - Pipeline execution and step metrics
+- `gateway_external_service_*` - OCR and Parse service calls, availability, errors
+- `gateway_ocr_cache_*` - OCR cache hit/miss tracking
+- `gateway_oban_*` - Background job queue metrics
+- `gateway_images_*` - System-level image storage metrics
+
+**Testing metrics locally**:
+```bash
+# Check metrics endpoint
+curl http://localhost:4000/metrics
+
+# Filter for specific metrics
+curl http://localhost:4000/metrics | grep gateway_external_service
 ```
 
 ## Deployment

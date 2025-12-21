@@ -1,6 +1,6 @@
 # Admin Panel Implementation Guide for Lovable
 
-**Last Updated:** December 15, 2024  
+**Last Updated:** December 14, 2025  
 **API Base URL:** `https://covr-gateway.fly.dev`
 
 This guide provides step-by-step instructions for implementing the admin panel in Lovable.dev, including data fetching, UI components, and debugging tips.
@@ -1414,12 +1414,15 @@ If you need dedicated admin API endpoints for better performance, we can add:
 
 ## Quick Reference
 
-### API Base URL
+### API Base URLs
 ```
-https://covr-gateway.fly.dev
+Gateway: https://covr-gateway.fly.dev
+OCR Parse Service: https://ocr-parse-service.fly.dev
 ```
 
 ### Key Endpoints
+
+**Gateway:**
 ```
 GET  /images                      # List images (with pagination)
 GET  /api/images/:id              # Get image metadata
@@ -1428,6 +1431,14 @@ GET  /api/images/:id/pipeline     # Get pipeline status
 DELETE /api/images/:id            # Delete image
 POST /api/images/:id/process      # Trigger processing
 GET  /healthz                     # Health check
+```
+
+**OCR Parse Service:**
+```
+POST /v1/parse                    # Parse OCR JSON to extract title/author
+POST /v1/parse-batch              # Batch parse (max 25 items)
+GET  /healthz                     # Health check
+GET  /version                     # Service version info
 ```
 
 ### Query Parameters for /images
@@ -1469,4 +1480,464 @@ If you encounter issues not covered in this guide:
 
 ---
 
-**Last Updated:** December 15, 2024
+## OCR Parse Service Integration
+
+### Overview
+
+A new **OCR Parse Service** has been added to extract **title** and **author** from OCR JSON output. This service does NOT perform OCR - it consumes the structured OCR JSON from the OCR service and uses heuristic ranking + verification to extract book metadata.
+
+- **Service URL:** `https://ocr-parse-service.fly.dev`
+- **Technology:** Python 3.12 + FastAPI
+- **Status:** Deployed and ready for integration
+
+### API Endpoints
+
+#### POST /v1/parse
+
+Parse OCR JSON to extract title and author.
+
+**Request:**
+```typescript
+interface ParseRequest {
+  ocr: {
+    request_id?: string;
+    image?: { width: number; height: number };
+    chunks?: {
+      blocks: Array<{
+        block_num: number;
+        bbox: [number, number, number, number];
+        paragraphs: Array<{
+          par_num: number;
+          bbox: [number, number, number, number];
+          lines: Array<{
+            line_num: number;
+            bbox: [number, number, number, number];
+            confidence?: number;
+            text?: string;
+            words: Array<{
+              word_num: number;
+              bbox: [number, number, number, number];
+              confidence?: number;
+              text: string;
+            }>;
+          }>;
+        }>;
+      }>;
+    };
+    text?: string;
+  };
+  settings?: {
+    conf_min_word?: number;
+    conf_min_line?: number;
+    max_lines_considered?: number;
+    merge_adjacent_lines?: boolean;
+    junk_filter?: boolean;
+    verify?: boolean;
+    verify_provider_order?: string[];
+    max_verify_queries?: number;
+  };
+}
+```
+
+**Response:**
+```typescript
+interface ParseResponse {
+  request_id: string;
+  upstream_request_id?: string;
+  upstream_trace_id?: string;
+  title?: string;
+  author?: string;
+  confidence: number;
+  method: {
+    ranker: string;
+    verifier: string;
+    fallback: string;
+  };
+  candidates: {
+    title: Array<{
+      text: string;
+      score: number;
+      bbox: [number, number, number, number];
+      features: {
+        size_norm: number;
+        center_norm: number;
+        upper_third: number;
+        lower_third: number;
+        char_len: number;
+        word_count: number;
+        caps_ratio: number;
+        has_by_prefix: boolean;
+        person_like: number;
+        junk_like: number;
+        line_conf?: number;
+      };
+    }>;
+    author: Array<{...}>;
+  };
+  verification: {
+    attempted: boolean;
+    matched: boolean;
+    provider?: string;
+    match_confidence?: number;
+    canonical?: {
+      title: string;
+      author: string;
+      isbn13?: string;
+      source_id?: string;
+    };
+    notes: string[];
+  };
+  warnings: string[];
+  timing_ms: {
+    parse: number;
+    rank: number;
+    verify: number;
+    total: number;
+  };
+}
+```
+
+**Example Usage:**
+```typescript
+// lib/ocr-parse.ts
+const API_BASE = "https://ocr-parse-service.fly.dev";
+
+export async function parseOCR(ocrJson: any, settings?: any): Promise<ParseResponse> {
+  const response = await fetch(`${API_BASE}/v1/parse`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-request-id": generateTraceId(), // Gateway trace ID
+    },
+    body: JSON.stringify({
+      ocr: ocrJson,
+      settings: settings || {
+        verify: true,
+        junk_filter: true,
+        merge_adjacent_lines: true,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OCR parse failed: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+```
+
+### Integration with Admin Dashboard
+
+#### Option 1: Display OCR Parse Results in Pipeline Status
+
+Add a new section to show title/author extracted from OCR:
+
+```typescript
+// components/PipelineDetails.tsx
+import { parseOCR } from "@/lib/ocr-parse";
+
+export function PipelineDetails({ execution }: { execution: PipelineExecution }) {
+  const [parseResult, setParseResult] = useState<ParseResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Find OCR extraction step
+  const ocrStep = execution.steps?.find((s) => s.step_name === "ocr_extraction");
+
+  useEffect(() => {
+    if (ocrStep?.output_data && !parseResult) {
+      setLoading(true);
+      parseOCR(ocrStep.output_data)
+        .then(setParseResult)
+        .catch(console.error)
+        .finally(() => setLoading(false));
+    }
+  }, [ocrStep, parseResult]);
+
+  return (
+    <div>
+      {/* Existing pipeline steps... */}
+      
+      {/* OCR Parse Results */}
+      {ocrStep && (
+        <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+          <h3 className="font-semibold mb-2">Extracted Book Metadata</h3>
+          {loading ? (
+            <div>Parsing OCR results...</div>
+          ) : parseResult ? (
+            <div>
+              <div className="mb-2">
+                <span className="font-medium">Title:</span>{" "}
+                <span className={parseResult.title ? "text-green-700" : "text-gray-500"}>
+                  {parseResult.title || "Not found"}
+                </span>
+                {parseResult.confidence > 0 && (
+                  <span className="ml-2 text-xs text-gray-500">
+                    ({Math.round(parseResult.confidence * 100)}% confidence)
+                  </span>
+                )}
+              </div>
+              <div className="mb-2">
+                <span className="font-medium">Author:</span>{" "}
+                <span className={parseResult.author ? "text-green-700" : "text-gray-500"}>
+                  {parseResult.author || "Not found"}
+                </span>
+              </div>
+              {parseResult.verification.matched && (
+                <div className="mt-2 p-2 bg-green-100 rounded">
+                  <span className="text-sm">
+                    ✓ Verified via {parseResult.verification.provider}
+                  </span>
+                  {parseResult.verification.canonical && (
+                    <div className="mt-1 text-xs">
+                      Canonical: {parseResult.verification.canonical.title} by{" "}
+                      {parseResult.verification.canonical.author}
+                      {parseResult.verification.canonical.isbn13 && (
+                        <span className="ml-2">ISBN: {parseResult.verification.canonical.isbn13}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {parseResult.warnings.length > 0 && (
+                <div className="mt-2 text-xs text-yellow-700">
+                  Warnings: {parseResult.warnings.join(", ")}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-gray-500 text-sm">No OCR data available</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+#### Option 2: Add Manual Parse Button
+
+Add a button to manually trigger OCR parsing for any image with OCR data:
+
+```typescript
+// components/ImageActions.tsx
+import { parseOCR } from "@/lib/ocr-parse";
+import { getPipelineStatus } from "@/lib/api";
+
+export function ImageActions({ imageId }: { imageId: string }) {
+  const [parsing, setParsing] = useState(false);
+  const [parseResult, setParseResult] = useState<ParseResponse | null>(null);
+
+  const handleParseOCR = async () => {
+    setParsing(true);
+    try {
+      // Get pipeline status to find OCR step
+      const pipeline = await getPipelineStatus(imageId);
+      const ocrStep = pipeline?.steps?.find((s) => s.step_name === "ocr_extraction");
+
+      if (!ocrStep?.output_data) {
+        alert("No OCR data available. Run OCR extraction first.");
+        return;
+      }
+
+      const result = await parseOCR(ocrStep.output_data, {
+        verify: true,
+        junk_filter: true,
+      });
+
+      setParseResult(result);
+    } catch (error) {
+      console.error("Parse failed:", error);
+      alert("Failed to parse OCR: " + (error as Error).message);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  return (
+    <div>
+      <button
+        onClick={handleParseOCR}
+        disabled={parsing}
+        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+      >
+        {parsing ? "Parsing..." : "Parse Title/Author from OCR"}
+      </button>
+
+      {parseResult && (
+        <div className="mt-4 p-4 bg-gray-50 rounded">
+          <h4 className="font-semibold mb-2">Parse Results</h4>
+          <div>
+            <div><strong>Title:</strong> {parseResult.title || "Not found"}</div>
+            <div><strong>Author:</strong> {parseResult.author || "Not found"}</div>
+            <div><strong>Confidence:</strong> {Math.round(parseResult.confidence * 100)}%</div>
+            {parseResult.verification.matched && (
+              <div className="mt-2 text-green-700">
+                ✓ Verified via {parseResult.verification.provider}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+#### Option 3: Auto-Parse on Pipeline Completion
+
+Automatically parse OCR results when pipeline completes:
+
+```typescript
+// hooks/useAutoParse.ts
+import { useEffect, useState } from "react";
+import { parseOCR } from "@/lib/ocr-parse";
+
+export function useAutoParse(pipeline: PipelineExecution | null) {
+  const [parseResult, setParseResult] = useState<ParseResponse | null>(null);
+
+  useEffect(() => {
+    if (!pipeline || pipeline.status !== "completed") {
+      setParseResult(null);
+      return;
+    }
+
+    const ocrStep = pipeline.steps?.find((s) => s.step_name === "ocr_extraction");
+    if (!ocrStep?.output_data) return;
+
+    parseOCR(ocrStep.output_data, { verify: true })
+      .then(setParseResult)
+      .catch((err) => console.error("Auto-parse failed:", err));
+  }, [pipeline]);
+
+  return parseResult;
+}
+
+// Usage in component
+function ImageDetails({ imageId }: { imageId: string }) {
+  const [pipeline, setPipeline] = useState<PipelineExecution | null>(null);
+  const parseResult = useAutoParse(pipeline);
+
+  // ... fetch pipeline status ...
+
+  return (
+    <div>
+      {/* Pipeline status... */}
+      {parseResult && (
+        <div className="mt-4">
+          <h3>Extracted Metadata</h3>
+          <div>Title: {parseResult.title}</div>
+          <div>Author: {parseResult.author}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Testing OCR Parse Service
+
+#### Test with Sample OCR JSON
+
+```typescript
+// tests/ocr-parse.test.ts
+import { parseOCR } from "@/lib/ocr-parse";
+
+const sampleOCR = {
+  request_id: "test-001",
+  image: { width: 1000, height: 1500 },
+  chunks: {
+    blocks: [
+      {
+        block_num: 1,
+        bbox: [0, 0, 1000, 1500],
+        paragraphs: [
+          {
+            par_num: 1,
+            bbox: [100, 400, 900, 600],
+            lines: [
+              {
+                line_num: 1,
+                bbox: [100, 400, 900, 550],
+                confidence: 95.0,
+                text: "THE GREAT GATSBY",
+                words: [
+                  { word_num: 1, bbox: [100, 400, 250, 550], confidence: 95.0, text: "THE" },
+                  { word_num: 2, bbox: [260, 400, 450, 550], confidence: 95.0, text: "GREAT" },
+                  { word_num: 3, bbox: [460, 400, 650, 550], confidence: 95.0, text: "GATSBY" },
+                ],
+              },
+            ],
+          },
+          {
+            par_num: 2,
+            bbox: [200, 1200, 800, 1350],
+            lines: [
+              {
+                line_num: 2,
+                bbox: [200, 1200, 800, 1350],
+                confidence: 90.0,
+                text: "by F. Scott Fitzgerald",
+                words: [
+                  { word_num: 1, bbox: [200, 1200, 250, 1350], confidence: 90.0, text: "by" },
+                  { word_num: 2, bbox: [260, 1200, 300, 1350], confidence: 90.0, text: "F." },
+                  { word_num: 3, bbox: [310, 1200, 450, 1350], confidence: 90.0, text: "Scott" },
+                  { word_num: 4, bbox: [460, 1200, 800, 1350], confidence: 90.0, text: "Fitzgerald" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  text: "THE GREAT GATSBY\nby F. Scott Fitzgerald",
+};
+
+test("parseOCR extracts title and author", async () => {
+  const result = await parseOCR(sampleOCR, { verify: true });
+
+  expect(result.title).toBe("THE GREAT GATSBY");
+  expect(result.author).toBe("F. Scott Fitzgerald");
+  expect(result.confidence).toBeGreaterThan(0.5);
+  expect(result.verification.attempted).toBe(true);
+});
+```
+
+### Error Handling
+
+```typescript
+try {
+  const result = await parseOCR(ocrJson);
+  // Use result...
+} catch (error) {
+  if (error instanceof Error) {
+    // Handle specific errors
+    if (error.message.includes("timeout")) {
+      console.error("Parse service timed out");
+    } else if (error.message.includes("400")) {
+      console.error("Invalid OCR JSON format");
+    } else {
+      console.error("Parse failed:", error.message);
+    }
+  }
+}
+```
+
+### Performance Considerations
+
+- **Caching:** Cache parse results in component state to avoid re-parsing
+- **Debouncing:** If auto-parsing, debounce to avoid excessive API calls
+- **Batch Processing:** Use `/v1/parse-batch` endpoint if parsing multiple images
+- **Verification:** Disable verification (`verify: false`) for faster parsing if canonical data not needed
+
+### Next Steps
+
+1. **Gateway Integration:** Add `ocr_parse` pipeline step in Phoenix gateway to automatically parse OCR results
+2. **Database Storage:** Store parse results in `pipeline_steps.output_data` for persistence
+3. **UI Enhancement:** Display title/author in image gallery and detail views
+4. **Search:** Use extracted titles/authors for image search functionality
+
+---
+
+**Last Updated:** December 21, 2024

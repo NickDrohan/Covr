@@ -282,10 +282,15 @@ defmodule ImageStore do
       from(i in Image, select: sum(i.byte_size))
       |> Repo.one() || 0
 
-    # Average size
-    avg_size =
+    # Average size (Postgres returns Decimal, convert to float)
+    avg_size_raw =
       from(i in Image, select: avg(i.byte_size))
-      |> Repo.one() || 0
+      |> Repo.one()
+
+    avg_size = decimal_to_float(avg_size_raw)
+
+    # Total size might also be a Decimal for very large sums
+    total_size_float = decimal_to_float(total_size)
 
     # Count by kind
     by_kind =
@@ -317,8 +322,8 @@ defmodule ImageStore do
 
     %{
       total_count: total_count,
-      total_size_bytes: total_size,
-      total_size_mb: Float.round(total_size / 1_048_576, 2),
+      total_size_bytes: round(total_size_float),
+      total_size_mb: Float.round(total_size_float / 1_048_576, 2),
       avg_size_bytes: round(avg_size),
       avg_size_kb: Float.round(avg_size / 1024, 2),
       by_kind: by_kind,
@@ -326,4 +331,9 @@ defmodule ImageStore do
       recent_uploads_24h: recent_count
     }
   end
+
+  # Helper to convert Decimal or nil to float
+  defp decimal_to_float(nil), do: 0.0
+  defp decimal_to_float(%Decimal{} = d), do: Decimal.to_float(d)
+  defp decimal_to_float(n) when is_number(n), do: n / 1
 end

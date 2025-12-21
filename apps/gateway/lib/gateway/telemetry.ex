@@ -126,13 +126,16 @@ defmodule Gateway.Telemetry do
     method = conn.method
     status = conn.status
 
-    # Calculate duration
+    # Calculate duration - handle both system_time and duration measurements
     start_time = Process.get({:http_request_start, conn.request_path})
     duration_seconds =
-      if start_time do
-        (measurements.system_time - start_time) / 1_000_000_000.0
-      else
-        0.0
+      cond do
+        start_time && Map.has_key?(measurements, :system_time) ->
+          (measurements.system_time - start_time) / 1_000_000_000.0
+        Map.has_key?(measurements, :duration) ->
+          measurements.duration / 1_000_000_000.0
+        true ->
+          0.0
       end
 
     # Record Prometheus metrics

@@ -52,6 +52,10 @@ if config_env() == :prod do
   # OCR Service URL (external microservice)
   ocr_service_url = System.get_env("OCR_SERVICE_URL") || "https://covr-ocr-service.fly.dev"
   config :gateway, :ocr_service_url, ocr_service_url
+
+  # OCR Parse Service URL (external microservice)
+  ocr_parse_service_url = System.get_env("OCR_PARSE_SERVICE_URL") || "https://ocr-parse-service.fly.dev"
+  config :gateway, :ocr_parse_service_url, ocr_parse_service_url
 end
 
 # CORS origins for frontend (Lovable.dev + localhost)

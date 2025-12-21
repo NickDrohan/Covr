@@ -3,7 +3,8 @@
 **Last Updated:** December 21, 2024  
 **Deployed At:** `https://covr-gateway.fly.dev`  
 **OCR Service:** `https://covr-ocr-service.fly.dev`  
-**Status:** Production-ready with async processing pipeline, admin dashboard, admin API, and OCR microservice
+**OCR Parse Service:** `https://ocr-parse-service.fly.dev`  
+**Status:** Production-ready with async processing pipeline, admin dashboard, admin API, OCR microservice, OCR parse microservice, and Parse API endpoint
 
 ---
 
@@ -34,25 +35,100 @@ The Covr Gateway is an Elixir/Phoenix umbrella application that provides:
 └──────┬──────────────────┬───────────┘
        │                  │
        ▼                  ▼
-┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│ Image Store │    │ Pipeline Steps   │    │  OCR Service     │
-│  (Postgres) │    │ (Internal/Oban)  │    │  (Python/FastAPI)│
-│             │    │                  │    │                  │
-│ - Images    │    │ - OCR Extraction │───▶│ - Tesseract OCR  │
-│ - Pipeline  │    │ - Book ID        │    │ - Image Preproc  │
-│   Executions│    │ - Cropping       │    │ - Structured     │
-│ - Steps     │    │ - Health Assess  │    │   JSON Output    │
-│ - Oban Jobs │    │                  │    │                  │
-└─────────────┘    └──────────────────┘    └──────────────────┘
+┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ Image Store │    │ Pipeline Steps   │    │  OCR Service     │    │ OCR Parse Service│
+│  (Postgres) │    │ (Internal/Oban)  │    │  (Python/FastAPI)│    │  (Python/FastAPI)│
+│             │    │                  │    │                  │    │                  │
+│ - Images    │    │ - OCR Extraction │───▶│ - Tesseract OCR  │    │ - Title Extract  │
+│ - Pipeline  │    │ - OCR Parse      │───▶│ - Image Preproc  │───▶│ - Author Extract │
+│   Executions│    │ - Book ID        │    │ - Structured     │    │ - Verification   │
+│ - Steps     │    │ - Cropping       │    │   JSON Output    │    │ - Heuristic Rank │
+│ - Oban Jobs │    │ - Health Assess  │    │                  │    │                  │
+└─────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
 ---
 
 ## What's New (December 21, 2024)
 
+### OCR Parse Microservice (NEW)
+
+A standalone Python/FastAPI service that extracts **title** and **author** from OCR JSON output:
+
+- **URL:** `https://ocr-parse-service.fly.dev`
+- **Technology:** Python 3.12 + FastAPI + heuristic ranking + verification APIs
+- **Directory:** `ocr_parse_service/`
+
+**Key Features:**
+- **Does NOT perform OCR** - only consumes OCR JSON from OCR service
+- Deterministic heuristic ranking with explainable scoring
+- Optional verification via Google Books and Open Library (no API keys required)
+- Returns structured candidates with confidence scores and features
+- Stateless, CPU-only, no secrets required
+
+**API Endpoints:**
+- `POST /v1/parse` - Parse OCR JSON to extract title/author
+- `POST /v1/parse-batch` - Batch parse multiple OCR JSONs (max 25)
+- `GET /healthz` - Health check
+- `GET /version` - Service version info
+
+**Example Usage:**
+```bash
+# Parse OCR JSON
+curl -X POST https://ocr-parse-service.fly.dev/v1/parse \
+  -H "Content-Type: application/json" \
+  -H "x-request-id: gateway-trace-123" \
+  -d '{
+    "ocr": {
+      "request_id": "ocr-001",
+      "image": {"width": 1000, "height": 1500},
+      "chunks": {...},
+      "text": "THE GREAT GATSBY\nby F. Scott Fitzgerald"
+    },
+    "settings": {
+      "verify": true,
+      "junk_filter": true
+    }
+  }'
+```
+
+**Response:**
+```json
+{
+  "request_id": "parse-uuid",
+  "upstream_request_id": "ocr-001",
+  "title": "THE GREAT GATSBY",
+  "author": "F. Scott Fitzgerald",
+  "confidence": 0.85,
+  "method": {
+    "ranker": "heuristic_v1",
+    "verifier": "google_books",
+    "fallback": "none"
+  },
+  "candidates": {...},
+  "verification": {
+    "matched": true,
+    "provider": "google_books",
+    "canonical": {
+      "title": "The Great Gatsby",
+      "author": "F. Scott Fitzgerald",
+      "isbn13": "9780743273565"
+    }
+  }
+}
+```
+
+**Configuration:**
+```bash
+# Set OCR parse service URL for gateway
+fly secrets set OCR_PARSE_SERVICE_URL=https://ocr-parse-service.fly.dev --app covr-gateway
+```
+
+See `ocr_parse_service/README.md` for full documentation.
+
 ### OCR Microservice
 
-A standalone Python/FastAPI OCR service has been added to extract text from book cover images:
+A standalone Python/FastAPI OCR service that extracts text from book cover images:
 
 - **URL:** `https://covr-ocr-service.fly.dev`
 - **Technology:** Python 3.12 + FastAPI + Tesseract 5
@@ -84,7 +160,7 @@ curl -X POST https://covr-ocr-service.fly.dev/v1/ocr \
 
 ### Gateway OCR Integration
 
-The Phoenix Gateway now includes an OCR extraction step in the pipeline:
+The Phoenix Gateway includes OCR extraction and parsing steps in the pipeline:
 
 - **Step Name:** `ocr_extraction`
 - **Order:** 0 (runs first, before book_identification)
@@ -96,10 +172,72 @@ The OCR step:
 3. Stores structured OCR results in `pipeline_steps.output_data`
 4. Logs all interactions with comprehensive security metadata
 
+### Parse API Endpoint (NEW)
+
+A new synchronous Parse endpoint for the Lovable frontend to extract title/author from an image:
+
+- **Endpoint:** `POST /api/images/:id/parse`
+- **Module:** `apps/gateway/lib/gateway/controllers/image_controller.ex`
+- **Helper:** `apps/gateway/lib/gateway/pipeline/steps/ocr_parse.ex`
+
+**Key Features:**
+- **Resource-efficient:** Reuses existing OCR results if available (checks pipeline_steps)
+- **Simple and reliable:** Synchronous request/response (no polling needed)
+- **Automatic fallback:** If no OCR data exists, calls OCR service first
+
+**Request:**
+```bash
+curl -X POST https://covr-gateway.fly.dev/api/images/{image_id}/parse \
+  -H "Content-Type: application/json" \
+  -d '{
+    "settings": {
+      "verify": true,
+      "junk_filter": true
+    }
+  }'
+```
+
+**Response:**
+```json
+{
+  "image_id": "uuid",
+  "ocr_source": "cached",
+  "gateway_timing_ms": 1234,
+  "request_id": "parse-uuid",
+  "title": "THE GREAT GATSBY",
+  "author": "F. Scott Fitzgerald",
+  "confidence": 0.85,
+  "method": {
+    "ranker": "heuristic_v1",
+    "verifier": "google_books",
+    "fallback": "none"
+  },
+  "candidates": {...},
+  "verification": {
+    "matched": true,
+    "provider": "google_books",
+    "canonical": {
+      "title": "The Great Gatsby",
+      "author": "F. Scott Fitzgerald",
+      "isbn13": "9780743273565"
+    }
+  }
+}
+```
+
+**Error Responses:**
+- `404` - Image not found
+- `503` - OCR or Parse service unavailable
+- `504` - Service timeout
+- `502` - Upstream service error
+
 **Configuration:**
 ```bash
 # Set OCR service URL for gateway
 fly secrets set OCR_SERVICE_URL=https://covr-ocr-service.fly.dev --app covr-gateway
+
+# Set OCR parse service URL for gateway
+fly secrets set OCR_PARSE_SERVICE_URL=https://ocr-parse-service.fly.dev --app covr-gateway
 ```
 
 ---
@@ -149,10 +287,12 @@ New REST API endpoints for Lovable frontend to manage images:
 ### Internal Pipeline Processing
 - Uses Oban for reliable async job processing
 - Four sequential steps:
-  0. **OCR Extraction** - Extract text from image via OCR microservice (NEW)
-  1. **Book Identification** - Detect if image is a book, extract metadata
+  0. **OCR Extraction** - Extract text from image via OCR microservice
+  1. **Book Identification** - Detect if image is a book, extract metadata (can use OCR parse results)
   2. **Image Cropping** - Detect book boundaries and crop
   3. **Health Assessment** - Analyze book condition
+
+**Future Enhancement:** Add `ocr_parse` step (order 0.5) between OCR extraction and book identification to extract title/author from OCR JSON.
 
 ### Placeholder Implementations
 All pipeline steps currently return **placeholder data**. They are designed to be easily integrated with real AI services:
@@ -185,7 +325,8 @@ PHX_HOST=covr-gateway.fly.dev
 PORT=8080
 CORS_ORIGINS=https://example.com,https://another.com
 MAX_UPLOAD_SIZE_MB=10
-OCR_SERVICE_URL=https://covr-ocr-service.fly.dev  # NEW
+OCR_SERVICE_URL=https://covr-ocr-service.fly.dev
+OCR_PARSE_SERVICE_URL=https://ocr-parse-service.fly.dev  # NEW
 ```
 
 ### Database Schema
@@ -357,6 +498,43 @@ Response (422 - Multiple books):
   }
 }
 ```
+
+### 8. Parse Image (Extract Title/Author)
+
+```
+POST /api/images/:id/parse
+Content-Type: application/json
+
+Body (optional):
+{
+  "settings": {
+    "verify": true,
+    "junk_filter": true,
+    "merge_adjacent_lines": true
+  }
+}
+
+Response (200):
+{
+  "image_id": "uuid",
+  "ocr_source": "cached" | "fresh",
+  "gateway_timing_ms": 1234,
+  "request_id": "uuid",
+  "title": "THE GREAT GATSBY",
+  "author": "F. Scott Fitzgerald",
+  "confidence": 0.85,
+  "method": {...},
+  "candidates": {...},
+  "verification": {...}
+}
+
+Response (404): {"error": "Image not found"}
+Response (503): {"error": "Service unavailable"}
+Response (504): {"error": "Service timeout"}
+```
+
+Extracts title and author from an image using OCR + Parse services.
+Reuses existing OCR results if available for efficiency.
 
 ### 9. Health Check
 
@@ -612,7 +790,8 @@ The gateway emits these telemetry events:
 - **Oban Worker:** `apps/gateway/lib/gateway/pipeline/workers/process_image_worker.ex`
 - **Step Behaviour:** `apps/gateway/lib/gateway/pipeline/step_behaviour.ex`
 - **Steps:** `apps/gateway/lib/gateway/pipeline/steps/`
-  - `ocr_extraction.ex` - Extract text via OCR microservice (NEW)
+  - `ocr_extraction.ex` - Extract text via OCR microservice
+  - `ocr_parse.ex` - Helper for calling OCR Parse service (NEW)
   - `book_identification.ex` - Detect if image is a book
   - `image_cropping.ex` - Crop image to book boundaries
   - `health_assessment.ex` - Assess book condition
@@ -642,6 +821,17 @@ The gateway emits these telemetry events:
 - **Dockerfile:** `ocr_service/Dockerfile`
 - **Fly Config:** `ocr_service/fly.toml`
 - **README:** `ocr_service/README.md`
+
+### OCR Parse Service
+- **Main App:** `ocr_parse_service/app/main.py`
+- **Normalization:** `ocr_parse_service/app/normalize.py`
+- **Ranker:** `ocr_parse_service/app/ranker.py`
+- **Verifier:** `ocr_parse_service/app/verifier/` (Google Books, Open Library)
+- **Models:** `ocr_parse_service/app/models.py`
+- **Tests:** `ocr_parse_service/tests/`
+- **Dockerfile:** `ocr_parse_service/Dockerfile`
+- **Fly Config:** `ocr_parse_service/fly.toml`
+- **README:** `ocr_parse_service/README.md`
 
 ### Documentation
 - **API Docs:** `docs/API.md`

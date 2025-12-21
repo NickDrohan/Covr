@@ -48,6 +48,10 @@ if config_env() == :prod do
     end
 
   config :gateway, :max_upload_size_bytes, max_upload_size * 1_048_576
+
+  # OCR Service URL (external microservice)
+  ocr_service_url = System.get_env("OCR_SERVICE_URL") || "https://covr-ocr-service.fly.dev"
+  config :gateway, :ocr_service_url, ocr_service_url
 end
 
 # CORS origins for frontend (Lovable.dev + localhost)

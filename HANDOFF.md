@@ -1,8 +1,9 @@
 # Covr Gateway Handoff Document
 
-**Last Updated:** December 15, 2024  
+**Last Updated:** December 21, 2024  
 **Deployed At:** `https://covr-gateway.fly.dev`  
-**Status:** Production-ready with async processing pipeline, admin dashboard, and admin API
+**OCR Service:** `https://covr-ocr-service.fly.dev`  
+**Status:** Production-ready with async processing pipeline, admin dashboard, admin API, and OCR microservice
 
 ---
 
@@ -33,17 +34,72 @@ The Covr Gateway is an Elixir/Phoenix umbrella application that provides:
 └──────┬──────────────────┬───────────┘
        │                  │
        ▼                  ▼
-┌─────────────┐    ┌──────────────────┐
-│ Image Store │    │ Pipeline Steps   │
-│  (Postgres) │    │ (Internal/Oban)  │
-│             │    │                  │
-│ - Images    │    │ - Book ID        │
-│ - Pipeline  │    │ - Cropping       │
-│   Executions│    │ - Health Assess  │
-│ - Steps     │    │                  │
-│ - Oban Jobs │    │ (Placeholder     │
-└─────────────┘    │  implementations)│
-                   └──────────────────┘
+┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ Image Store │    │ Pipeline Steps   │    │  OCR Service     │
+│  (Postgres) │    │ (Internal/Oban)  │    │  (Python/FastAPI)│
+│             │    │                  │    │                  │
+│ - Images    │    │ - OCR Extraction │───▶│ - Tesseract OCR  │
+│ - Pipeline  │    │ - Book ID        │    │ - Image Preproc  │
+│   Executions│    │ - Cropping       │    │ - Structured     │
+│ - Steps     │    │ - Health Assess  │    │   JSON Output    │
+│ - Oban Jobs │    │                  │    │                  │
+└─────────────┘    └──────────────────┘    └──────────────────┘
+```
+
+---
+
+## What's New (December 21, 2024)
+
+### OCR Microservice
+
+A standalone Python/FastAPI OCR service has been added to extract text from book cover images:
+
+- **URL:** `https://covr-ocr-service.fly.dev`
+- **Technology:** Python 3.12 + FastAPI + Tesseract 5
+- **Directory:** `ocr_service/`
+
+**Key Features:**
+- Extracts text with hierarchical structure (blocks → paragraphs → lines → words)
+- Returns bounding boxes and confidence scores for each element
+- Image preprocessing (EXIF rotation, resizing, contrast normalization)
+- Structured JSON logging for security monitoring
+- Public API (no authentication - security via gateway logging)
+
+**API Endpoints:**
+- `POST /v1/ocr` - Extract text from image (multipart or base64 JSON)
+- `GET /healthz` - Health check with Tesseract version
+- `GET /version` - Service version info
+
+**Example Usage:**
+```bash
+# Multipart upload
+curl -X POST https://covr-ocr-service.fly.dev/v1/ocr \
+  -F "image=@book_cover.jpg"
+
+# Base64 JSON
+curl -X POST https://covr-ocr-service.fly.dev/v1/ocr \
+  -H "Content-Type: application/json" \
+  -d '{"image_b64": "<base64-image>", "filename": "cover.jpg"}'
+```
+
+### Gateway OCR Integration
+
+The Phoenix Gateway now includes an OCR extraction step in the pipeline:
+
+- **Step Name:** `ocr_extraction`
+- **Order:** 0 (runs first, before book_identification)
+- **Module:** `apps/gateway/lib/gateway/pipeline/steps/ocr_extraction.ex`
+
+The OCR step:
+1. Fetches image bytes from database
+2. Calls OCR service via HTTP POST with base64-encoded image
+3. Stores structured OCR results in `pipeline_steps.output_data`
+4. Logs all interactions with comprehensive security metadata
+
+**Configuration:**
+```bash
+# Set OCR service URL for gateway
+fly secrets set OCR_SERVICE_URL=https://covr-ocr-service.fly.dev --app covr-gateway
 ```
 
 ---
@@ -91,9 +147,9 @@ New REST API endpoints for Lovable frontend to manage images:
 - See `docs/PROMETHEUS_ALERTS.md` for alerting rules
 
 ### Internal Pipeline Processing
-- Replaced external microservice calls with internal Elixir modules
 - Uses Oban for reliable async job processing
-- Three sequential steps:
+- Four sequential steps:
+  0. **OCR Extraction** - Extract text from image via OCR microservice (NEW)
   1. **Book Identification** - Detect if image is a book, extract metadata
   2. **Image Cropping** - Detect book boundaries and crop
   3. **Health Assessment** - Analyze book condition
@@ -129,6 +185,7 @@ PHX_HOST=covr-gateway.fly.dev
 PORT=8080
 CORS_ORIGINS=https://example.com,https://another.com
 MAX_UPLOAD_SIZE_MB=10
+OCR_SERVICE_URL=https://covr-ocr-service.fly.dev  # NEW
 ```
 
 ### Database Schema
@@ -331,11 +388,34 @@ See `docs/PROMETHEUS.md` for complete metrics documentation.
 
 ## Pipeline Step Implementation
 
-### Current Steps (Placeholder)
+### Current Steps
 
 Each step is implemented as an Elixir module following `Gateway.Pipeline.StepBehaviour`:
 
-#### 0. Image Rotation (`apps/gateway/lib/gateway/pipeline/steps/image_rotation.ex`)
+#### 0. OCR Extraction (`apps/gateway/lib/gateway/pipeline/steps/ocr_extraction.ex`) - NEW
+Calls external OCR microservice to extract text from images.
+```elixir
+# Returns:
+%{
+  "request_id" => "uuid",
+  "engine" => %{"name" => "tesseract", "version" => "5.3.0", ...},
+  "image" => %{"width" => 1200, "height" => 1600, "processed" => true, ...},
+  "timing_ms" => %{"decode" => 15, "preprocess" => 45, "ocr" => 1234, "total" => 1294},
+  "text" => "Full extracted text...",
+  "chunks" => %{
+    "blocks" => [
+      %{
+        "block_num" => 1,
+        "bbox" => [10, 10, 500, 200],
+        "paragraphs" => [...]
+      }
+    ]
+  },
+  "warnings" => []
+}
+```
+
+#### Image Rotation (`apps/gateway/lib/gateway/pipeline/steps/image_rotation.ex`)
 Standalone step for manual rotation workflow (not part of auto pipeline).
 ```elixir
 # Returns:
@@ -532,6 +612,7 @@ The gateway emits these telemetry events:
 - **Oban Worker:** `apps/gateway/lib/gateway/pipeline/workers/process_image_worker.ex`
 - **Step Behaviour:** `apps/gateway/lib/gateway/pipeline/step_behaviour.ex`
 - **Steps:** `apps/gateway/lib/gateway/pipeline/steps/`
+  - `ocr_extraction.ex` - Extract text via OCR microservice (NEW)
   - `book_identification.ex` - Detect if image is a book
   - `image_cropping.ex` - Crop image to book boundaries
   - `health_assessment.ex` - Assess book condition
@@ -552,12 +633,23 @@ The gateway emits these telemetry events:
 - **Prod Config:** `config/prod.exs`
 - **Runtime Config:** `config/runtime.exs`
 
+### OCR Service
+- **Main App:** `ocr_service/app/main.py`
+- **OCR Logic:** `ocr_service/app/ocr.py`
+- **Preprocessing:** `ocr_service/app/preprocess.py`
+- **Models:** `ocr_service/app/models.py`
+- **Tests:** `ocr_service/tests/`
+- **Dockerfile:** `ocr_service/Dockerfile`
+- **Fly Config:** `ocr_service/fly.toml`
+- **README:** `ocr_service/README.md`
+
 ### Documentation
 - **API Docs:** `docs/API.md`
 - **Prometheus Metrics:** `docs/PROMETHEUS.md`
 - **Alerting Rules:** `docs/PROMETHEUS_ALERTS.md`
 - **Architecture:** `CLAUDE.md`
 - **Database Schema:** `database/schema.sql`
+- **OCR Service:** `ocr_service/README.md`
 
 ---
 

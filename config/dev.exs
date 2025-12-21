@@ -29,3 +29,6 @@ config :phoenix, :plug_init_mode, :runtime
 # LiveView configuration for development
 config :gateway, Gateway.Endpoint,
   live_view: [signing_salt: "dev-liveview-salt-for-development"]
+
+# OCR Service URL for development (local Docker or remote)
+config :gateway, :ocr_service_url, System.get_env("OCR_SERVICE_URL") || "http://localhost:8080"

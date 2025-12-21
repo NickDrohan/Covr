@@ -312,6 +312,108 @@ Triggers a specific processing workflow on an image. Use this to manually proces
 }
 ```
 
+### Parse Image (Extract Title/Author)
+
+```
+POST /api/images/:id/parse
+Content-Type: application/json
+```
+
+Extracts title and author from an image using OCR + OCR Parse services. This endpoint is synchronous - it waits for completion and returns the result.
+
+**Features:**
+- Reuses existing OCR results if available (checks pipeline_steps for completed `ocr_extraction`)
+- If no OCR data exists, calls OCR service first
+- Calls OCR Parse service to extract title/author with verification
+
+**Request Body (optional):**
+```json
+{
+  "settings": {
+    "verify": true,
+    "junk_filter": true,
+    "merge_adjacent_lines": true,
+    "conf_min_word": 30,
+    "conf_min_line": 35,
+    "max_lines_considered": 80
+  }
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "image_id": "550e8400-e29b-41d4-a716-446655440000",
+  "ocr_source": "cached",
+  "gateway_timing_ms": 1234,
+  "request_id": "parse-uuid",
+  "upstream_request_id": "ocr-uuid",
+  "title": "THE GREAT GATSBY",
+  "author": "F. Scott Fitzgerald",
+  "confidence": 0.85,
+  "method": {
+    "ranker": "heuristic_v1",
+    "verifier": "google_books",
+    "fallback": "none"
+  },
+  "candidates": {
+    "title": [...],
+    "author": [...]
+  },
+  "verification": {
+    "attempted": true,
+    "matched": true,
+    "provider": "google_books",
+    "match_confidence": 0.92,
+    "canonical": {
+      "title": "The Great Gatsby",
+      "author": "F. Scott Fitzgerald",
+      "isbn13": "9780743273565"
+    }
+  },
+  "warnings": [],
+  "timing_ms": {
+    "parse": 15,
+    "rank": 5,
+    "verify": 450,
+    "total": 470
+  }
+}
+```
+
+**Response Fields:**
+- `image_id`: The requested image ID
+- `ocr_source`: `"cached"` if reused existing OCR, `"fresh"` if called OCR service
+- `gateway_timing_ms`: Total time in gateway (including OCR if fresh)
+- `title`: Extracted book title (may be null)
+- `author`: Extracted author name (may be null)
+- `confidence`: Overall confidence score (0-1)
+- `verification.matched`: Whether title/author was verified via external API
+- `verification.canonical`: Verified book metadata (if matched)
+
+**Error (404 Not Found):**
+```json
+{
+  "error": "Image not found",
+  "image_id": "..."
+}
+```
+
+**Error (503 Service Unavailable):**
+```json
+{
+  "error": "OCR Parse service not configured"
+}
+```
+
+**Error (504 Gateway Timeout):**
+```json
+{
+  "error": "Service timeout",
+  "image_id": "..."
+}
+```
+
 ### Health Check
 
 ```
@@ -420,6 +522,47 @@ async function processImage(imageId: string, workflow: Workflow) {
   return data;
 }
 
+interface ParseSettings {
+  verify?: boolean;
+  junk_filter?: boolean;
+  merge_adjacent_lines?: boolean;
+}
+
+interface ParseResult {
+  image_id: string;
+  ocr_source: "cached" | "fresh";
+  gateway_timing_ms: number;
+  request_id: string;
+  title: string | null;
+  author: string | null;
+  confidence: number;
+  verification: {
+    matched: boolean;
+    provider?: string;
+    canonical?: {
+      title: string;
+      author: string;
+      isbn13?: string;
+    };
+  };
+}
+
+async function parseImage(imageId: string, settings?: ParseSettings): Promise<ParseResult> {
+  const response = await fetch(`${API_BASE}/api/images/${imageId}/parse`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings }),
+  });
+  
+  const data = await response.json();
+  
+  if (!response.ok) {
+    throw new Error(data.error || "Parse failed");
+  }
+  
+  return data;
+}
+
 // Usage:
 // const result = await uploadImage(fileInput.files[0]);
 // console.log("Uploaded:", result.image_id);
@@ -452,6 +595,16 @@ async function processImage(imageId: string, workflow: Workflow) {
 // const processResult = await processImage(imageId, "rotation");
 // if (processResult.success && processResult.result.rotated) {
 //   console.log(`Image rotated ${processResult.result.rotation_degrees} degrees`);
+// }
+//
+// // Parse an image to extract title/author
+// const parseResult = await parseImage(imageId, { verify: true });
+// console.log(`Title: ${parseResult.title}`);
+// console.log(`Author: ${parseResult.author}`);
+// console.log(`Confidence: ${parseResult.confidence}`);
+// if (parseResult.verification.matched) {
+//   console.log(`Verified via ${parseResult.verification.provider}`);
+//   console.log(`ISBN: ${parseResult.verification.canonical?.isbn13}`);
 // }
 ```
 

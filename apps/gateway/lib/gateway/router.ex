@@ -36,6 +36,7 @@ defmodule Gateway.Router do
     # Admin image management
     delete "/images/:id", ImageController, :delete
     post "/images/:id/process", ImageController, :process
+    post "/images/:id/parse", ImageController, :parse
   end
 
   # Metrics endpoint (no auth required, but can be restricted in production)

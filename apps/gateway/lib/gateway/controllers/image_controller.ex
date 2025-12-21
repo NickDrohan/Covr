@@ -1,7 +1,10 @@
 defmodule Gateway.ImageController do
   use Phoenix.Controller, formats: [:json]
 
+  require Logger
+
   alias Plug.Conn
+  alias Gateway.Pipeline.Steps.{OcrExtraction, OcrParse}
 
   @doc """
   POST /api/images
@@ -237,6 +240,174 @@ defmodule Gateway.ImageController do
             error: error
           })
       end
+    end
+  end
+
+  @doc """
+  POST /api/images/:id/parse
+  Parses an image to extract title and author using OCR + Parse services.
+
+  Optimized for reliability and resource efficiency:
+  - Reuses existing OCR results if available
+  - Calls OCR service if no existing results
+  - Calls OCR Parse service to extract title/author
+
+  Body (optional): { "settings": { "verify": true, "junk_filter": true, ... } }
+
+  Returns:
+    - 200 with parse results on success
+    - 404 if image not found
+    - 503 if OCR or Parse service unavailable
+    - 504 if timeout
+  """
+  def parse(conn, %{"id" => id} = params) do
+    start_time = System.monotonic_time(:millisecond)
+    settings = Map.get(params, "settings", %{})
+
+    Logger.info("Starting parse request",
+      image_id: id,
+      has_settings: map_size(settings) > 0
+    )
+
+    with {:ok, image} <- ImageStore.get_image(id),
+         {:ok, ocr_json, ocr_source} <- get_or_fetch_ocr(id, image),
+         {:ok, parse_result} <- OcrParse.call_parse_service(ocr_json, settings) do
+      end_time = System.monotonic_time(:millisecond)
+      duration_ms = end_time - start_time
+
+      Logger.info("Parse request completed",
+        image_id: id,
+        ocr_source: ocr_source,
+        duration_ms: duration_ms,
+        title: Map.get(parse_result, "title"),
+        author: Map.get(parse_result, "author"),
+        confidence: Map.get(parse_result, "confidence")
+      )
+
+      json(conn, Map.merge(parse_result, %{
+        "image_id" => id,
+        "ocr_source" => ocr_source,
+        "gateway_timing_ms" => duration_ms
+      }))
+    else
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "Image not found", image_id: id})
+
+      {:error, :ocr_service_not_configured} ->
+        conn
+        |> put_status(:service_unavailable)
+        |> json(%{error: "OCR service not configured"})
+
+      {:error, :ocr_parse_service_not_configured} ->
+        conn
+        |> put_status(:service_unavailable)
+        |> json(%{error: "OCR Parse service not configured"})
+
+      {:error, :timeout} ->
+        conn
+        |> put_status(:gateway_timeout)
+        |> json(%{error: "Service timeout", image_id: id})
+
+      {:error, {:connection_error, reason}} ->
+        Logger.error("Parse service connection error",
+          image_id: id,
+          reason: inspect(reason)
+        )
+
+        conn
+        |> put_status(:service_unavailable)
+        |> json(%{error: "Service unavailable", details: inspect(reason)})
+
+      {:error, {:service_error, status, message}} ->
+        Logger.error("Parse service error",
+          image_id: id,
+          status: status,
+          message: message
+        )
+
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{error: "Upstream service error", status: status, message: message})
+
+      {:error, reason} ->
+        Logger.error("Parse request failed",
+          image_id: id,
+          error: inspect(reason)
+        )
+
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Parse failed", details: inspect(reason)})
+    end
+  end
+
+  # ============================================================================
+  # Parse Helpers
+  # ============================================================================
+
+  # Try to get existing OCR results from pipeline, or fetch fresh from OCR service
+  defp get_or_fetch_ocr(image_id, image) do
+    case get_existing_ocr_results(image_id) do
+      {:ok, ocr_json} ->
+        # Record cache hit
+        Gateway.Metrics.record_ocr_cache("hit")
+        Logger.info("Reusing existing OCR results", image_id: image_id)
+        {:ok, ocr_json, "cached"}
+
+      {:error, :not_found} ->
+        # Record cache miss
+        Gateway.Metrics.record_ocr_cache("miss")
+        Logger.info("No existing OCR results, fetching from OCR service", image_id: image_id)
+        fetch_fresh_ocr(image_id, image)
+    end
+  end
+
+  # Get OCR results from existing pipeline execution
+  defp get_existing_ocr_results(image_id) do
+    case ImageStore.Pipeline.get_latest_execution_for_image(image_id) do
+      {:ok, execution} ->
+        # Find the ocr_extraction step
+        case Enum.find(execution.steps, &(&1.step_name == "ocr_extraction" && &1.status == "completed")) do
+          nil ->
+            {:error, :not_found}
+
+          step ->
+            ocr_json = step.output_data
+
+            # Validate that OCR data is usable (not a placeholder)
+            if is_map(ocr_json) && !Map.get(ocr_json, "placeholder", false) do
+              {:ok, ocr_json}
+            else
+              {:error, :not_found}
+            end
+        end
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
+  end
+
+  # Fetch fresh OCR results from OCR service
+  defp fetch_fresh_ocr(image_id, image) do
+    case ImageStore.get_image_blob(image_id) do
+      {:ok, image_bytes, _content_type} ->
+        metadata = %{
+          content_type: image.content_type,
+          byte_size: image.byte_size
+        }
+
+        case OcrExtraction.execute(image_id, image_bytes, metadata) do
+          {:ok, ocr_json} ->
+            {:ok, ocr_json, "fresh"}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, :not_found} ->
+        {:error, :not_found}
     end
   end
 

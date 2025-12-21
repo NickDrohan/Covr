@@ -264,6 +264,66 @@ defmodule Gateway.Metrics do
   end
 
   # ============================================================================
+  # External Service Metrics
+  # ============================================================================
+
+  @doc """
+  Counter for external service calls (OCR, Parse).
+  """
+  def external_service_calls_total do
+    Counter.new(
+      name: :gateway_external_service_calls_total,
+      help: "Total number of external service calls",
+      labels: [:service, :endpoint, :status]
+    )
+  end
+
+  @doc """
+  Histogram for external service call duration in seconds.
+  """
+  def external_service_call_duration_seconds do
+    Histogram.new(
+      name: :gateway_external_service_call_duration_seconds,
+      help: "External service call duration in seconds",
+      buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30],
+      labels: [:service, :endpoint]
+    )
+  end
+
+  @doc """
+  Counter for external service errors by type.
+  """
+  def external_service_errors_total do
+    Counter.new(
+      name: :gateway_external_service_errors_total,
+      help: "Total number of external service errors",
+      labels: [:service, :endpoint, :error_type]
+    )
+  end
+
+  @doc """
+  Gauge for external service availability (1 = up, 0 = down).
+  """
+  def external_service_availability do
+    Gauge.new(
+      name: :gateway_external_service_availability,
+      help: "External service availability status (1 = up, 0 = down)",
+      labels: [:service]
+    )
+  end
+
+  @doc """
+  Counter for OCR cache hits/misses.
+  """
+  def ocr_cache_total do
+    Counter.new(
+      name: :gateway_ocr_cache_total,
+      help: "OCR cache hits and misses",
+      labels: [:result]
+    )
+  end
+
+  # ============================================================================
   # System Metrics
   # ============================================================================
 
@@ -340,6 +400,13 @@ defmodule Gateway.Metrics do
     db_pool_available()
     db_query_duration_seconds()
 
+    # External service metrics
+    external_service_calls_total()
+    external_service_call_duration_seconds()
+    external_service_errors_total()
+    external_service_availability()
+    ocr_cache_total()
+
     # System metrics
     images_total()
     images_storage_bytes()
@@ -414,7 +481,7 @@ defmodule Gateway.Metrics do
   Updates Oban queue metrics.
   """
   def update_oban_queue_metrics(queue, state, count) do
-    Gauge.set(name: :gateway_oban_queue_depth, labels: [queue, state], value: count)
+    Gauge.set([name: :gateway_oban_queue_depth, labels: [queue, state]], count)
   end
 
   @doc """
@@ -429,8 +496,8 @@ defmodule Gateway.Metrics do
   Updates database pool metrics.
   """
   def update_db_pool_metrics(pool, size, available) do
-    Gauge.set(name: :gateway_db_pool_size, labels: [pool], value: size)
-    Gauge.set(name: :gateway_db_pool_available, labels: [pool], value: available)
+    Gauge.set([name: :gateway_db_pool_size, labels: [pool]], size)
+    Gauge.set([name: :gateway_db_pool_available, labels: [pool]], available)
   end
 
   @doc """
@@ -444,12 +511,48 @@ defmodule Gateway.Metrics do
   Updates system metrics from database stats.
   """
   def update_system_metrics(stats) do
-    Gauge.set(name: :gateway_images_total, labels: [], value: stats.total_count)
-    Gauge.set(name: :gateway_images_storage_bytes, labels: [], value: stats.total_size_bytes)
+    Gauge.set([name: :gateway_images_total, labels: []], stats.total_count)
+    Gauge.set([name: :gateway_images_storage_bytes, labels: []], stats.total_size_bytes)
 
     # Update pipeline execution status gauges
     for {status, count} <- stats.pipeline_status_counts do
-      Gauge.set(name: :gateway_pipeline_executions_by_status, labels: [status], value: count)
+      Gauge.set([name: :gateway_pipeline_executions_by_status, labels: [status]], count)
     end
+  end
+
+  @doc """
+  Records an external service call (OCR, Parse, etc.).
+  """
+  def record_external_service_call(service, endpoint, status, duration_seconds) do
+    Counter.inc(name: :gateway_external_service_calls_total, labels: [service, endpoint, status])
+    Histogram.observe(
+      name: :gateway_external_service_call_duration_seconds,
+      labels: [service, endpoint],
+      value: duration_seconds
+    )
+
+    # Update availability based on success/failure
+    availability = if status >= 200 and status < 300, do: 1, else: 0
+    Gauge.set([name: :gateway_external_service_availability, labels: [service]], availability)
+  end
+
+  @doc """
+  Records an external service error.
+  """
+  def record_external_service_error(service, endpoint, error_type) do
+    Counter.inc(
+      name: :gateway_external_service_errors_total,
+      labels: [service, endpoint, error_type]
+    )
+
+    # Mark service as down
+    Gauge.set([name: :gateway_external_service_availability, labels: [service]], 0)
+  end
+
+  @doc """
+  Records OCR cache hit or miss.
+  """
+  def record_ocr_cache(result) when result in ["hit", "miss"] do
+    Counter.inc(name: :gateway_ocr_cache_total, labels: [result])
   end
 end

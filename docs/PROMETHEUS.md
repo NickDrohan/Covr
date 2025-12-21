@@ -78,10 +78,10 @@ gateway_http_requests_total{method="POST",route="/api/images",status="201"} 42
 ### Pipeline Step Metrics
 
 #### `gateway_pipeline_steps_total`
-**Type:** Counter  
-**Labels:** `step_name`, `status`  
-**Description:** Total number of pipeline step executions  
-**Step names:** `book_identification`, `image_cropping`, `health_assessment`  
+**Type:** Counter
+**Labels:** `step_name`, `status`
+**Description:** Total number of pipeline step executions
+**Step names:** `ocr_extraction`, `book_identification`, `image_cropping`, `health_assessment`
 **Status values:** `pending`, `running`, `completed`, `failed`, `skipped`
 
 #### `gateway_pipeline_step_duration_seconds`
@@ -137,22 +137,56 @@ gateway_http_requests_total{method="POST",route="/api/images",status="201"} 42
 **Labels:** `operation`  
 **Description:** Database query duration in seconds
 
+### External Service Metrics
+
+#### `gateway_external_service_calls_total`
+**Type:** Counter
+**Labels:** `service`, `endpoint`, `status`
+**Description:** Total number of external service calls
+**Services:** `ocr_service`, `ocr_parse_service`
+**Endpoints:** `/v1/ocr`, `/v1/parse`
+**Status:** HTTP status code (200, 400, 500, etc.) or 0 for connection errors
+
+#### `gateway_external_service_call_duration_seconds`
+**Type:** Histogram
+**Labels:** `service`, `endpoint`
+**Description:** External service call duration in seconds
+**Buckets:** 0.1, 0.5, 1, 2, 5, 10, 20, 30
+
+#### `gateway_external_service_errors_total`
+**Type:** Counter
+**Labels:** `service`, `endpoint`, `error_type`
+**Description:** Total number of external service errors
+**Error types:** `timeout`, `connection_error`, `http_4xx`, `http_5xx`, `invalid_json`, `unknown_error`
+
+#### `gateway_external_service_availability`
+**Type:** Gauge
+**Labels:** `service`
+**Description:** External service availability status (1 = up, 0 = down)
+**Services:** `ocr_service`, `ocr_parse_service`
+
+#### `gateway_ocr_cache_total`
+**Type:** Counter
+**Labels:** `result`
+**Description:** OCR cache hits and misses
+**Result values:** `hit`, `miss`
+
 ### System Metrics
 
 #### `gateway_images_total`
-**Type:** Gauge  
-**Description:** Total number of images in database  
+**Type:** Gauge
+**Description:** Total number of images in database
 **Update frequency:** Every 30 seconds
 
 #### `gateway_images_storage_bytes`
-**Type:** Gauge  
-**Description:** Total image storage size in bytes  
+**Type:** Gauge
+**Description:** Total image storage size in bytes
 **Update frequency:** Every 30 seconds
 
 #### `gateway_pipeline_executions_by_status`
-**Type:** Gauge  
-**Labels:** `status`  
-**Description:** Number of pipeline executions by status  
+**Type:** Gauge
+**Labels:** `status`
+**Description:** Number of pipeline executions by status
 **Update frequency:** Every 30 seconds
 
 ## Example Queries
@@ -195,6 +229,33 @@ sum(gateway_oban_queue_depth) by (queue, state)
 ### Image Upload Rate by Kind
 ```promql
 rate(gateway_image_uploads_total[5m]) by (kind)
+```
+
+### External Service Success Rate
+```promql
+sum(rate(gateway_external_service_calls_total{status=~"2.."}[5m])) by (service) /
+sum(rate(gateway_external_service_calls_total[5m])) by (service)
+```
+
+### External Service Latency by Service
+```promql
+histogram_quantile(0.95, rate(gateway_external_service_call_duration_seconds_bucket[5m])) by (service)
+```
+
+### External Service Error Rate
+```promql
+rate(gateway_external_service_errors_total[5m]) by (service, error_type)
+```
+
+### OCR Cache Hit Rate
+```promql
+rate(gateway_ocr_cache_total{result="hit"}[5m]) /
+rate(gateway_ocr_cache_total[5m])
+```
+
+### Service Availability
+```promql
+gateway_external_service_availability
 ```
 
 ## Scraping Configuration
